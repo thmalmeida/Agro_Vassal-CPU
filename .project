@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>Agro_VassalE</name>
+	<name>Agro_Vassal-CPU</name>
 	<comment></comment>
 	<projects>
 		<project>arduino_core</project>

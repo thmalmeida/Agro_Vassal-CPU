@@ -8,6 +8,9 @@ RM := rm -rf
 
 # All of the sources participating in the build are defined here
 -include sources.mk
+-include Sys/subdir.mk
+-include RTC/subdir.mk
+-include Comm/subdir.mk
 -include subdir.mk
 -include objects.mk
 
@@ -45,47 +48,47 @@ endif
 
 # Add inputs and outputs from these tool invocations to the build variables 
 LSS += \
-Agro_VassalE.lss \
+Agro_Vassal-CPU.lss \
 
 FLASH_IMAGE += \
-Agro_VassalE.hex \
+Agro_Vassal-CPU.hex \
 
 SIZEDUMMY += \
 sizedummy \
 
 
 # All Target
-all: Agro_VassalE.elf secondary-outputs
+all: Agro_Vassal-CPU.elf secondary-outputs
 
 # Tool invocations
-Agro_VassalE.elf: $(OBJS) $(USER_OBJS)
+Agro_Vassal-CPU.elf: $(OBJS) $(USER_OBJS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: AVR C++ Linker'
-	avr-g++ -Wl,-Map,Agro_VassalE.map,--cref -mrelax -Wl,--gc-sections -Wl,--gc-sections -L"C:\Users\Thiago\sourceCodes1\arduino_core\328P_16MHz" -mmcu=atmega328p -o "Agro_VassalE.elf" $(OBJS) $(USER_OBJS) $(LIBS)
+	avr-g++ -Wl,-Map,Agro_Vassal-CPU.map,--cref -mrelax -Wl,--gc-sections -Wl,--gc-sections -L"C:\Users\Thiago\sourceCodes1\arduino_core\328P_16MHz" -mmcu=atmega328p -o "Agro_Vassal-CPU.elf" $(OBJS) $(USER_OBJS) $(LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 
-Agro_VassalE.lss: Agro_VassalE.elf
+Agro_Vassal-CPU.lss: Agro_Vassal-CPU.elf
 	@echo 'Invoking: AVR Create Extended Listing'
-	-avr-objdump -h -S Agro_VassalE.elf  >"Agro_VassalE.lss"
+	-avr-objdump -h -S Agro_Vassal-CPU.elf  >"Agro_Vassal-CPU.lss"
 	@echo 'Finished building: $@'
 	@echo ' '
 
-Agro_VassalE.hex: Agro_VassalE.elf
+Agro_Vassal-CPU.hex: Agro_Vassal-CPU.elf
 	@echo 'Create Flash image (ihex format)'
-	-avr-objcopy -R .eeprom -R .fuse -R .lock -R .signature -O ihex Agro_VassalE.elf  "Agro_VassalE.hex"
+	-avr-objcopy -R .eeprom -R .fuse -R .lock -R .signature -O ihex Agro_Vassal-CPU.elf  "Agro_Vassal-CPU.hex"
 	@echo 'Finished building: $@'
 	@echo ' '
 
-sizedummy: Agro_VassalE.elf
+sizedummy: Agro_Vassal-CPU.elf
 	@echo 'Invoking: Print Size'
-	-avr-size --format=avr --mcu=atmega328p Agro_VassalE.elf
+	-avr-size --format=avr --mcu=atmega328p Agro_Vassal-CPU.elf
 	@echo 'Finished building: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) $(C_UPPER_DEPS)$(S_DEPS)$(LSS)$(C_DEPS)$(FLASH_IMAGE)$(CC_DEPS)$(ELFS)$(C++_DEPS)$(OBJS)$(CXX_DEPS)$(ASM_DEPS)$(SIZEDUMMY)$(S_UPPER_DEPS)$(CPP_DEPS) Agro_VassalE.elf
+	-$(RM) $(C_UPPER_DEPS)$(S_DEPS)$(LSS)$(C_DEPS)$(FLASH_IMAGE)$(CC_DEPS)$(ELFS)$(C++_DEPS)$(OBJS)$(CXX_DEPS)$(ASM_DEPS)$(SIZEDUMMY)$(S_UPPER_DEPS)$(CPP_DEPS) Agro_Vassal-CPU.elf
 	-@echo ' '
 
 secondary-outputs: $(LSS) $(FLASH_IMAGE) $(SIZEDUMMY)

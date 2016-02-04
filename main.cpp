@@ -40,7 +40,7 @@ Errors:
 0x03: Im sensor down!
 0x04: PRessure DOWN!
 0x05: PRessure HIGH!
-0x06:
+0x06: k3 locked on starting
 0x07: Time after green flag
 0x08: Bluetooth serial first error
 0x09: Bluetooth serial second error
@@ -58,52 +58,31 @@ Errors:
 
 #include <Arduino.h>
 
-#include "DS1307RTC.h"
-#include "Time.h"
+#include "RTC/Time.h"
+#include "RTC/DS1307RTC.h"
+
+#include "Comm/Wire.h"
+#include "Comm/SoftwareSerial.h"
 
 //#include "MemoryFree.h"
 
 tmElements_t tm;
+SoftwareSerial SerialSIM900 =  SoftwareSerial(2, 3);
 
-#define s11_on()	PORTB |=  (1<<4);	// S11
-#define s11_off()	PORTB &= ~(1<<4);	// S11
-#define	s10_on()	PORTB |=  (1<<3);	// S10
-#define	s10_off()	PORTB &= ~(1<<3);	// S10
-#define s09_on()	PORTB |=  (1<<2);	// S09
-#define s09_off()	PORTB &= ~(1<<2);	// S09
-#define s08_on()	PORTB |=  (1<<1);	// S08
-#define s08_off()	PORTB &= ~(1<<1);	// S08
-#define s07_on()	PORTB |=  (1<<0);	// S07
-#define s07_off()	PORTB &= ~(1<<0);	// S07
-
-#define s06_on()	PORTB |=  (1<<5);	// S06
-#define s06_off()	PORTB &= ~(1<<5);	// S06
-#define s05_on()	PORTB |=  (1<<4);	// S05
-#define s05_off()	PORTB &= ~(1<<4);	// S05
-#define s04_on()	PORTB |=  (1<<3);	// S04
-#define s04_off()	PORTB &= ~(1<<3);	// S04
-#define s03_on()	PORTB |=  (1<<2);	// S03
-#define s03_off()	PORTB &= ~(1<<2);	// S03
-#define s02_on()	PORTB |=  (1<<1);	// S02
-#define s02_off()	PORTB &= ~(1<<1);	// S02
-#define s01_on()	PORTB |=  (1<<0);	// S01
-#define s01_off()	PORTB &= ~(1<<0);	// S01
-
-#define k3_on()		PORTD |=  (1<<5);	// Triac 3 is enabled
-#define k3_off()	PORTD &= ~(1<<5);	// Triac 3 is disabled
-#define k2_on()		PORTD |=  (1<<6);	// Triac 2 is enabled
-#define k2_off()	PORTD &= ~(1<<6);	// Triac 2 is disabled
-#define k1_on()		PORTD |=  (1<<7);	// Triac 1 is enabled
-#define k1_off()	PORTD &= ~(1<<7);	// Triac 1 is disabled
+#define k3_on()		PORTD |=  (1<<4);	// Triac 3 is enabled
+#define k3_off()	PORTD &= ~(1<<4);	// Triac 3 is disabled
+#define k2_on()		PORTD |=  (1<<5);	// Triac 2 is enabled
+#define k2_off()	PORTD &= ~(1<<5);	// Triac 2 is disabled
+#define k1_on()		PORTD |=  (1<<6);	// Triac 1 is enabled
+#define k1_off()	PORTD &= ~(1<<6);	// Triac 1 is disabled
 
 // Contactors input
-#define k1_readPin	bit_is_clear(PIND, 4)
-#define k3_readPin 	bit_is_clear(PINC, 2)
-#define Th_readPin	bit_is_clear(PINC, 3)
+#define k1_readPin	bit_is_clear(PIND, 7)
+#define k3_readPin 	bit_is_clear(PINB, 0)
+#define Th_readPin	bit_is_clear(PINB, 1)
 
-#define k3_readPinD	bit_is_set(PIND, 5)
-#define k2_readPinD	bit_is_set(PIND, 6)
-#define k1_readPinD	bit_is_set(PIND, 7)
+//#define k1_readPinD	bit_is_set(PIND, 7)
+//#define k3_readPinD	bit_is_set(PINB, 0)
 
 // Time decision variables
 #define HourOn	21
@@ -112,15 +91,45 @@ tmElements_t tm;
 #define MinOff	0
 
 // PRessure
-#define sectorMax 	11
-#define minPRess	49
-#define Imin 		80
-#define Iconst		1.30
+#define valveAlloc	11
+
+// -------------------------------------------------------- //
 
 // Global
-const uint8_t timePipeB = 185;					// Time to turn down while valve does not open
-volatile uint8_t count_timePipeB = timePipeB;
+// EEPROM memory Addresses
+const uint8_t addr_stateMode   	= 0;		// 1  byte
+const uint8_t addr_lastError	= 1;		// 1  byte
+const uint8_t addr_minPRess		= 2;		// 1  byte
+const uint8_t addr_maxPRess		= 3;		// 1  byte
+const uint8_t addr_minIs		= 4;		// 2  bytes
+const uint8_t addr_maxIs		= 6;		// 2  bytes
+const uint8_t addr_timePipeB	= 8;		// 2  byte
+const uint8_t addr_timeSector   = 10;		// 11 bytes allocated
+const uint8_t addr_valveSequence= 30;		// 11 bytes allocated
+const uint8_t addr_HourOnTM 	= 42;		// nTM (9) byte(s)
+const uint8_t addr_MinOnTM 		= 52;		// nTM (9) byte(s)
+const uint8_t addr_nTM 			= 62;		// 1 byte
+const uint8_t addr_motorTimerStart1 = 65;	// 2 bytes
+const uint8_t addr_motorTimerStart2 = 67;	// 2 bytes
+
+uint16_t timePipeB = 200;						// time delay in seconds
+volatile uint16_t count_timePipeB = timePipeB;
 volatile uint8_t flag_BrokenPipeVerify = 0;
+
+//const uint8_t addr_standBy_min 	= 5;		// 2 bytes
+//const uint8_t addr_motorTimerE 	= 7;			// 1 byte
+//const uint8_t addr_Iper				= 32;		// 1 byte only
+//const uint8_t addr_iValveCheck		= 33;		// 1 byte only
+//const uint8_t addr_LevelRef 	= 2;			// 4 bytes
+
+// Times
+uint8_t nTM;
+uint8_t HourOnTM[9];
+uint8_t MinOnTM[9];
+
+// Motor timers in milliseconds
+uint8_t motorTimerStart1 = 55;
+uint16_t motorTimerStart2 = 200;
 
 // Logs
 const int nLog = 12;
@@ -137,40 +146,42 @@ uint8_t flag_PORF = 0;			// Power-on Reset Flag
 
 uint8_t motorStatus = 0;
 uint8_t periodState = 0;
-
-// EEPROM memory Addresses
-const uint8_t addr_stateMode    	= 0;		// 1  byte  allocated
-const uint8_t addr_standBy_min  	= 1;		// 1  byte  allocated
-const uint8_t addr_lastError		= 2;		// 1  byte  allocated
-const uint8_t addr_timeSector   	= 10;		// 11 bytes allocated
-const uint8_t addr_valveSequence	= 21;		// 11 bytes allocated
-
 uint8_t stateMode = 0;
 
+uint8_t minPRess = 0;
+uint8_t maxPRess = 0;
+uint16_t minIs = 0;
+uint16_t maxIs = 0;
+uint16_t nodeValve_maxIs = 0;
+
+uint8_t flag_iValveCheck = 1;
 uint8_t flag_waitPowerOn = 0;	// Minutes before start motor after power line ocasionally down
 uint8_t powerOn_min_Standy = 0;
 uint8_t powerOn_min = 0;
 uint8_t powerOn_sec = 0;
 
 volatile uint16_t timeSector = 0;
-uint8_t timeSectorVectorMin[11];
-uint8_t flag_1s = 0;
 uint8_t lastError = 0;
+uint8_t timeSectorVectorMin[valveAlloc];
+uint8_t valveSequence[valveAlloc] 	= {0,0,0,0,0,0,0,0,0,0,0};
+uint8_t valveStatus[valveAlloc]		= {0,0,0,0,0,0,0,0,0,0,0};
+uint16_t valveIs					= 0;						// Current from sensor
+uint8_t sectorCurrently 			= 0;
+uint8_t sectorChanged 				= 0;
 
-uint8_t valveSequence[11] 	= {0,0,0,0,0,0,0,0,0,0,0};
-uint8_t valveStatus[11] 	= {0,0,0,0,0,0,0,0,0,0,0};
-uint8_t sectorCurrently 	= 0;
-uint8_t sectorChanged 		= 0;
-
+uint8_t flag_1s = 0;
 uint8_t flag_timeOVF = 0;
 uint8_t flag_timeMatch = 0;
-
 uint8_t flag01 = 0;
 uint8_t flag02 = 0;
 uint8_t flag03 = 0;
 uint8_t flag04 = 0;
 uint8_t flag05 = 0;
 uint8_t flag_frameStartBT = 0;
+uint8_t flag_debug = 0;
+uint8_t flag_Started = 0;
+
+uint8_t debugCommand = 0;
 
 // Communicaton variables
 char inChar, aux[3], aux2[5], sInstr[15];
@@ -180,8 +191,25 @@ uint8_t j2 = 0;
 uint8_t enableTranslate_Bluetooth = 0;
 uint8_t enableDecode = 0;
 
+// SIM900 Communication variables
+uint8_t jSIM900 = 0;
+uint8_t flag_frameStartSIM900 = 0;
+char sInstrSIM900[15];
+uint8_t rLengthSIM900 = 0;
+uint8_t enableTranslate_SIM900 = 0;
+uint8_t count_SIM900_timeout = 0;
+uint8_t count_30s = 0;
+uint8_t flag_SIM900_checkAlive = 0;
+uint8_t enableSIM900_Send = 0;
+
 int PRess;
 int Pdig=0;
+
+enum states01 {
+	redTime,
+	greenTime
+};
+enum states01 periodo = redTime;
 
 //void init_SIM900()
 //{
@@ -191,40 +219,17 @@ int Pdig=0;
 //	PORTH &= ~(1<<PH5);
 //	PORTH &= ~(1<<PH6);
 //}
-void init_valves()
-{
-	DDRB |= (1<<5);	// S06
-	DDRB |= (1<<4);	// S05
-	DDRB |= (1<<3);	// S04
-	DDRB |= (1<<2); // S03
-	DDRB |= (1<<1); // S02
-	DDRB |= (1<<0); // S01
-}
+
 void init_contactors()
 {
-	DDRD |=  (1<<PD5);	// k1
-	DDRD |=  (1<<PD6);	// k2
-	DDRD |=  (1<<PD7);	// k3
+	DDRD |=  (1<<PD4);	// k1
+	DDRD |=  (1<<PD5);	// k2
+	DDRD |=  (1<<PD6);	// k3
 
-	DDRD &= ~(1<<PD4);	// K1 NO input
-	DDRC &= ~(1<<PC2);	// K3 NO input
-	DDRC &= ~(1<<PC3);	// Thermal device protection
-}
+	DDRD &= ~(1<<PD7);	// K1 NO input
+	DDRB &= ~(1<<PB0);	// K3 NO input
+	DDRB &= ~(1<<PB1);	// Thermal device protection
 
-void init_Timer1_1Hz()
-{
-	// Timer 1 with 16 bit time counter. On a Fast PWM
-	// TCCR1A <==	COM1A1	COM1A0	COM1B1	COM1B0	COM1C1	COM1C0	WGM11	WGM10
-	TCCR1A = 0b00000010;
-
-	// TCCR1B <==	ICNC1	ICES1	–		WGM13	WGM12	CS12	CS11	CS10
-	TCCR1B = 0b00011101;	// Start timer at Fcpu/1024
-
-	// TIMSK1 <==	–		–		ICIE1	–		OCIE1C	OCIE1B	OCIE1A	TOIE1
-//	TIMSK1 |= (1 << OCIE1A);
-	TIMSK1 = 0b00000010;
-
-	ICR1 = 15624;	// To obtain 1Hz clock.
 }
 void init_ADC()
 {
@@ -240,14 +245,18 @@ void init_ADC()
 //	ADCSRB &= ~(1<<MUX5);				// To select ADC0;
 
 //	ADMUX ==> REFS1 REFS0 ADLAR MUX4 MUX3 MUX2 MUX1 MUX0
-//	ADMUX &= ~(1<<REFS1);				// AREF, Internal Vref turned off
-//	ADMUX &= ~(1<<REFS0);
-	ADMUX &= ~(1<<REFS1);				// AVCC with external capacitor at AREF pin
-	ADMUX |=  (1<<REFS0);
-//	ADMUX |=  (1<<REFS1);				// Internal 1.1V Voltage Reference with external capacitor at AREF pin
-//	ADMUX &= ~(1<<REFS0);
-//	ADMUX |=  (1<<REFS0);				// Internal 2.56V reference
+//	ADMUX &=  ~(1<<REFS1);				// AREF, Internal Vref turned off
+//	ADMUX &=  ~(1<<REFS0);
+
+	ADMUX &=  ~(1<<REFS1);				// AVCC with external capacitor at AREF pin
+	ADMUX |=   (1<<REFS0);
+
+//	ADMUX |=   (1<<REFS1);				// Reserved
+//	ADMUX &=  ~(1<<REFS0);
+
+//	ADMUX |=  (1<<REFS0);				// Internal 1.1V Voltage Reference with external capacitor at AREF pin
 //	ADMUX |=  (1<<REFS1);
+
 
 //	ADMUX |=  (1<<ADLAR);				// Left Adjustment. To ADCH register.
 //										// Using 8 bits. Get ADCH only.
@@ -258,6 +267,21 @@ void init_ADC()
 	ADMUX &= ~(1<<MUX2);
 	ADMUX &= ~(1<<MUX1);
 	ADMUX |=  (1<<MUX0);
+}
+void init_Timer1_1Hz()
+{
+	// Timer 1 with 16 bit time counter. On a Fast PWM
+	// TCCR1A <==	COM1A1	COM1A0	COM1B1	COM1B0	COM1C1	COM1C0	WGM11	WGM10
+	TCCR1A = 0b00000010;
+
+	// TCCR1B <==	ICNC1	ICES1	–		WGM13	WGM12	CS12	CS11	CS10
+	TCCR1B = 0b00011101;	// Start timer at Fcpu/1024
+
+	// TIMSK1 <==	–		–		ICIE1	–		OCIE1C	OCIE1B	OCIE1A	TOIE1
+//	TIMSK1 |= (1 << OCIE1A);
+	TIMSK1 = 0b00000010;
+
+	ICR1 = 15624;	// To obtain 1Hz clock.
 }
 void init_WDT()
 {
@@ -279,7 +303,6 @@ void init_WDT()
 
 	wdt_enable(WDTO_8S);
 }
-
 void stop_WDT()
 {
 	cli();
@@ -366,443 +389,6 @@ double get_Pressure()
 	return Pa;
 }
 
-float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
-{
-	int i, j=0;
-	uint8_t high, low;
-	int divScale_count = 1;									// Não mexer!
-
-//	ADCSRB &= ~(1<<MUX5);
-//	ADMUX  &= ~(1<<MUX4);
-//	ADMUX  &= ~(1<<MUX3);
-	ADMUX  &= ~(1<<MUX2);
-	ADMUX  &= ~(1<<MUX1);
-	ADMUX  |=  (1<<MUX0);									// Select ADC1
-
-	// Parameters for ADC converter - Variables
-	const float f = 60.0;									// Hertz;
-	const int numberOfCycles = 2;							// Number of cycles;
-	const int divScale = 16;									// Prescale for real sample rate Fs;
-
-	const float Fs = 16000000/128/13;									// Sample rate of signal processed;
-	const int nPointsPerCycle = (int) Fs/f;								// Number of points per cycle;
-	const int nPoints = (int) nPointsPerCycle*numberOfCycles; 			// Number of signal points.
-
-	const float Fs_div = 16000000/128/13/divScale;						// Sample rate of signal processed;
-	const int nPointsPerCycle_div = (int) Fs_div/f;						// Number of points per cycle;
-	const int nPoints_div = (int) nPointsPerCycle_div*numberOfCycles;	// Number of signal points.
-
-
-//	sprintf(buffer,"---- Signal Captured ----");
-//	Serial.println(buffer);
-//	Serial.println("");
-//
-//	Serial.print("Fs:");
-//	Serial.println(Fs);
-//	Serial.println("");
-//
-//	sprintf(buffer,", nPointsPerCycle:%d", nPointsPerCycle);
-//	Serial.println(buffer);
-//	Serial.println("");
-//
-//	sprintf(buffer,"nPoints:%d", nPoints);
-//	Serial.println(buffer);
-//	Serial.println("");
-//
-//
-//
-//	sprintf(buffer,"---- Signal Processed ----");
-//	Serial.println(buffer);
-//	Serial.println("");
-//
-//	Serial.print("Fs:");
-//	Serial.println(Fs_div);
-//	Serial.println("");
-//
-//	sprintf(buffer,", nPointsPerCycle:%d", nPointsPerCycle_div);
-//	Serial.println(buffer);
-//	Serial.println("");
-//
-//	sprintf(buffer,"nPoints:%d", nPoints_div);
-//	Serial.println(buffer);
-//	Serial.println("");
-
-//	char buffer[10];
-//	sprintf(buffer,"A%d ",freeMemory());
-//	Serial.println(buffer);
-
-	int *adcSamples = NULL;
-	adcSamples = (int*)malloc(nPoints_div * sizeof(int));
-
-//	sprintf(buffer,"B% d",freeMemory());
-//	Serial.println(buffer);
-
-	// 160.2564 = 16000000/128/13/60.0;
-	for(i=0;i<nPoints;i++)
-	{
-		ADCSRA |= (1<<ADSC);				// Start conversion;
-		while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
-
-//		Serial.println((ADCH << 8) | ADCL);
-
-		if(divScale_count == 1)
-		{
-			low  = ADCL;
-			high = ADCH;
-
-			j = (int) i/divScale;
-			adcSamples[j] = (high << 8) | low;
-			divScale_count = divScale;
-		}
-		else
-		{
-			divScale_count--;
-		}
-	}
-//	sprintf(buffer,"C%d",freeMemory());
-//	Serial.println(buffer);
-
-//	Serial.println("ENTROU!");
-//	for(i=0;i<nPoints_div;i++)
-//	{
-//		Serial.println(adcSamples[i]);
-//	}
-//	Serial.println("SAIU!");
-
-	float *vs = NULL;
-	vs = (float*)malloc(nPoints_div*sizeof(float));
-
-	for(i=0;i<nPoints_div;i++)
-	{
-		vs[i] = (adcSamples[i]*5.0)/1024.0;
-	}
-
-//	sprintf(buffer,"D%d",freeMemory());
-//	Serial.println(buffer);
-
-	free(adcSamples);
-//	sprintf(buffer,"E%d",freeMemory());
-//	Serial.println(buffer);
-
-	// Offset remove.
-	float Vmean = 0.0;
-	for(i=0;i<nPoints_div;i++)
-		Vmean += vs[i];
-
-	Vmean = Vmean/nPoints_div;
-
-	for(i=0;i<nPoints_div;i++)
-		vs[i] = vs[i] - Vmean;
-
-//	sprintf(buffer,"F %d",freeMemory());
-//	Serial.println(buffer);
-
-	float *vs2 = NULL;
-	vs2 = (float*)malloc(nPoints_div*sizeof(float));
-	// Power signal
-	for(i=0;i<nPoints_div;i++)
-		vs2[i] = vs[i]*vs[i];
-
-//	sprintf(buffer,"G %d",freeMemory());
-//	Serial.println(buffer);
-	free(vs);
-
-//	sprintf(buffer,"H %d",freeMemory());
-//	Serial.println(buffer);
-
-	float sum=0;
-	float V2mean;
-
-	// mean finder
-	for(i=0;i<nPoints_div;i++)
-		sum += vs2[i];
-	V2mean = sum/nPoints_div;
-
-	free(vs2);
-
-//	sprintf(buffer,"I%d",freeMemory());
-//	Serial.println(buffer);
-
-	float I = 0.0;
-	float k = 2020.0;
-	float R = 310.0;
-
-	// RMS equation
-	I = (k*sqrt(V2mean))/R;
-
-	return I;
-}
-//float getAirTemperature()
-//{
-////	int *adcSamples = NULL;
-////	adcSamples = (int*)malloc(nPoints_div * sizeof(int));
-//
-//	byte i;
-//	byte present = 0;
-//	byte type_s = 0;
-//	byte data[12];
-//	byte addr[8];
-//	float celsius;//, fahrenheit;
-//
-//	if ( !ds.search(addr))
-//	{
-////		Serial.println("No more addresses.");
-////		Serial.println();
-//		ds.reset_search();
-//		delay(250);
-//	}
-//
-////	Serial.print("ROM =");
-////	for( i = 0; i < 8; i++)
-////	{
-////		Serial.write(' ');
-////		Serial.print(addr[i], HEX);
-////	}
-//
-//	if (OneWire::crc8(addr, 7) != addr[7])
-//	{
-////		Serial.println("CRC is not valid!");
-//	}
-////	Serial.println();
-//
-//	// the first ROM byte indicates which chip
-//	switch (addr[0])
-//	{
-//		case 0x10:
-////			Serial.println("  Chip = DS18S20");  // or old DS1820
-//			type_s = 1;
-//			break;
-//
-//		case 0x28:
-////			Serial.println("  Chip = DS18B20");
-//			type_s = 0;
-//			break;
-//
-//		case 0x22:
-////			Serial.println("  Chip = DS1822");
-//			type_s = 0;
-//			break;
-//
-//		default:
-////			Serial.println("Device is not a DS18x20 family device.");
-//			break;
-//	}
-//
-//	ds.reset();
-//	ds.select(addr);
-//	ds.write(0x44, 1);        // start conversion, with parasite power on at the end
-//
-//	delay(1000);     // maybe 750ms is enough, maybe not
-//	// we might do a ds.depower() here, but the reset will take care of it.
-//
-//	present = ds.reset();
-//	ds.select(addr);
-//	ds.write(0xBE);         // Read Scratchpad
-//
-////	Serial.print("  Data = ");
-////	Serial.print(present, HEX);
-////	Serial.print(" ");
-//
-//	for ( i = 0; i < 9; i++) {           // we need 9 bytes
-//		data[i] = ds.read();
-////		Serial.print(data[i], HEX);
-////		Serial.print(" ");
-//	}
-//
-////	Serial.print(" CRC=");
-////	Serial.print(OneWire::crc8(data, 8), HEX);
-////	Serial.println();
-//
-//	// Convert the data to actual temperature
-//	// because the result is a 16 bit signed integer, it should
-//	// be stored to an "int16_t" type, which is always 16 bits
-//	// even when compiled on a 32 bit processor.
-//	int16_t raw = (data[1] << 8) | data[0];
-//
-//	if (type_s)
-//	{
-//		raw = raw << 3; // 9 bit resolution default
-//		if (data[7] == 0x10)
-//		{
-//			// "count remain" gives full 12 bit resolution
-//			raw = (raw & 0xFFF0) + 12 - data[6];
-//		}
-//	}
-//	else
-//	{
-//		byte cfg = (data[4] & 0x60);
-//		// at lower res, the low bits are undefined, so let's zero them
-//		if (cfg == 0x00) raw = raw & ~7;  // 9 bit resolution, 93.75 ms
-//		else if (cfg == 0x20) raw = raw & ~3; // 10 bit res, 187.5 ms
-//		else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
-//		//// default is 12 bit resolution, 750 ms conversion time
-//	}
-//
-//	celsius = (float)raw / 16.0;
-////	fahrenheit = celsius * 1.8 + 32.0;
-////	Serial.print("  Temperature = ");
-////	Serial.print(celsius);
-////	Serial.println(" Celsius, ");
-////	Serial.print(fahrenheit);
-////	Serial.println(" Fahrenheit");
-//
-//	return celsius;
-//}
-//void temperatureAnalysis()
-//{
-//	/*
-//	The temperature interval is from 0 C to +50 C represented by one
-//	8-bit variable (0-255). Using deltaT = 51 C with 255/51 = 0.2 C step.
-//	It need some simple equation to make the conversion.
-//
-//	+50 C___		255___
-//	  	  |				|
-//	 	  |				|
-//	 	  |				|
-//	temp__|			xs__|
-//	 	  |				|
-//	 	  |				|
-//	 	  |				|
-//		 _|_		   _|_
-//	0 C			 0
-//
-//	(xs - 0) = temp - (0)
-//	(255 - 0)  +50 - (0)
-//
-//	Direct Conversion
-//	xs = 255*(temp+0)/51
-//	tempNow_XS = (uint8_t) 255.0*(tempNow+0.0)/51.0;
-//
-//	Inverse Conversion
-//	temp = (TempMax*xs/255) - TempMin
-//	tempNow = (uint8_t) ((sTempMax*tempNow_XS)/255.0 - sTempMin);
-//
-//	 tempRead
-//	 */
-//
-//	const float sTempMax = 50.0;
-//	const float sTempMin = 0.0;
-//
-//	uint8_t flag_dayRefresh = 0;
-//
-//	uint8_t temperature_Day[nTempDay];
-//	uint8_t temperature_Max[nTempMonth];
-//	uint8_t temperature_Avg[nTempMonth];
-//	uint8_t temperature_Min[nTempMonth];
-//
-////	float tempMax, tempMin;
-//	float tempMean_XS, tempMax_XS, tempMin_XS;
-//	uint8_t tempNow_XS;
-//
-//	// Reset! (for the first time)---------------------------
-//	tempNow = getAirTemperature();
-//	tempNow_XS = (uint8_t) 255.0*(tempNow+sTempMin)/sTempMax;
-//
-//	int i;
-//	for(i=0;i<nTempDay;i++)
-//		temperature_Day[i] = 25;
-//
-//	for(i=0;i<nTempMonth;i++)
-//	{
-//		temperature_Max[i] = tempNow_XS;
-//		temperature_Min[i] = tempNow_XS;
-//	}
-//
-//	tempMean_XS = tempNow_XS;
-//	tempMax_XS = tempNow_XS;
-//	tempMin_XS = tempNow_XS;
-//	// -------------------------------------------------------
-//
-//
-//
-//	// Refresh every 5 minutes;
-//	float tempMean = tempNow;
-//	if(flag_5min)
-//	{
-//		flag_5min = 0;
-//
-//		tempNow = getAirTemperature();
-//		tempNow_XS = (uint8_t) 255.0*(tempNow+sTempMin)/sTempMax;
-//
-//		// in 5 min interval -------------------------------------
-//		for(i=(nTempDay-1);i>0;i--)
-//		{
-//			temperature_Day[i] = temperature_Day[i-1];
-//		}
-//		temperature_Day[0] = tempNow_XS;
-//
-//		// mean
-//		tempMean = (tempMean+tempNow)/2.0;
-//	}
-//
-//
-//
-//	// Refresh once by day
-//	if(flag_dayRefresh)
-//	{
-//		flag_dayRefresh = 0;
-//
-//		// at the and of day write the max and min values of day ---
-//		for(i=0;i<nTempDay;i++)
-//		{
-//			if(tempMax_XS<temperature_Day[i])
-//			{
-//				tempMax_XS = temperature_Day[i];
-//			}
-//
-//			if(tempMin_XS>temperature_Day[i])
-//			{
-//				tempMin_XS = temperature_Day[i];
-//			}
-//		}
-//
-//		uint8_t tempAux;
-//		for(i=(nTempMonth-1);i>0;i--)
-//		{
-//			temperature_Max[i] = temperature_Max[i-1];
-//			tempAux = eeprom_read_byte((uint8_t *)(i-1+addr_tempMax));
-//			eeprom_write_byte(( uint8_t *)(i+addr_tempMin), tempAux);
-//
-//			temperature_Min[i] = temperature_Min[i-1];
-//			tempAux = eeprom_read_byte((uint8_t *)(i-1+addr_tempMin));
-//			eeprom_write_byte(( uint8_t *)(i+addr_tempMin), tempAux);
-//
-//			temperature_Avg[i] = temperature_Avg[i-1];
-//			tempAux = eeprom_read_byte((uint8_t *)(i-1+addr_tempMean));
-//			eeprom_write_byte(( uint8_t *)(i+addr_tempMean), tempAux);
-//		}
-//		temperature_Max[0] = tempMax_XS;
-//		eeprom_write_byte(( uint8_t *)(addr_tempMax), tempMax_XS);
-//
-//		temperature_Min[0] = tempMin_XS;
-//		eeprom_write_byte(( uint8_t *)(addr_tempMin), tempMin_XS);
-//
-//		temperature_Avg[0] = tempMean_XS;
-//		eeprom_write_byte(( uint8_t *)(addr_tempMean), tempMean_XS);
-//	}
-//
-//	// Read Temperature
-//
-//}
-//
-//int soilSensorRead()
-//{
-//	uint8_t high, low;
-//
-//	ADMUX |=  (1<<MUX1);							// Select ADC2
-//	ADMUX &= ~(1<<MUX0);
-//
-//	ADCSRA |= (1<<ADSC);				// Start conversion;
-//	while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
-//
-//	low  = ADCL;
-//	high = ADCH;
-//
-//	soilHumidity = (high << 8) | low;
-//
-//	return soilHumidity;
-//}
-
 void logMessage(uint8_t loadType, uint8_t newStatus)
 {
 	int i;
@@ -838,219 +424,50 @@ void logMessage(uint8_t loadType, uint8_t newStatus)
 //	minuteLog[0] = tm.Minute;
 }
 
-void motor_start()
+void nodeValve_setInstr(uint8_t sectorPrivate, uint8_t status, uint8_t makeLog)
 {
-	k1_on();
-	k3_on();
-	wdt_reset();
-	_delay_ms(5000);
-	wdt_reset();
-
-	k3_off();
-	uint32_t count = 0;
-	while(k3_readPin)
+	uint8_t type = 0;
+	uint8_t size = 4;
+	if((!sectorPrivate) && (!status) &&  (!makeLog))
 	{
-		count++;
-		if(count>=50000)
-		{
-			k1_off();
-			k2_off();
-			k3_off();
-			return;
-		}
+		type = 3;
+
+		Wire.beginTransmission(8);
+
+		Wire.write(type);			// 0
+		Wire.write(size);			// 1
+		Wire.write(0x00);			// 2
+		Wire.write(0x00);			// 3
+
+		Wire.endTransmission();
+		_delay_ms(500);								// wait a little bit for sector get stable
 	}
-	_delay_ms(100);
-	k2_on();
-
-	// carga, estado;
-	logMessage(12, 1);
-//	Serial.print("Count = ");
-//	Serial.println(count);
-}
-void motor_stop()
-{
-	k1_off();
-	k2_off();
-	logMessage(12, 0);
-//	motorStatus = 0;
-}
-void valveInstr(uint8_t sectorPrivate, uint8_t status, uint8_t makeLog)
-{
-	// These flags comes here because when you change sector the pressure go down.
-	// With this, you disable the pressure turn system down verify.
-	flag_BrokenPipeVerify = 0;
-	count_timePipeB = timePipeB;
-
-	switch (sectorPrivate)
+	else
 	{
-		case 1:
-			if(status)
-			{
-				s01_on();
-				valveStatus[0] = 1;
-			}
-			else
-			{
-				s01_off();
-				valveStatus[0] = 0;
-			}
-			break;
+		type = 1;
 
-		case 2:
-			if(status)
-			{
-				s02_on();
-				valveStatus[1] = 1;
-			}
-			else
-			{
-				s02_off();
-				valveStatus[1] = 0;
-			}
-			break;
+		Wire.beginTransmission(8);
 
-		case 3:
-			if(status)
-			{
-				s03_on();
-				valveStatus[2] = 1;
-			}
-			else
-			{
-				s03_off();
-				valveStatus[2] = 0;
-			}
-			break;
+		Wire.write(type);			// 0
+		Wire.write(size);			// 1
+		Wire.write(sectorPrivate);	// 2
+		Wire.write(status);			// 3
 
-		case 4:
-			if(status)
-			{
-				s04_on();
-				valveStatus[3] = 1;
-			}
-			else
-			{
-				s04_off();
-				valveStatus[3] = 0;
-			}
-			break;
+		Wire.endTransmission();
+		_delay_ms(500);								// wait a little bit for sector get stable
 
-		case 5:
-			if(status)
-			{
-				s05_on();
-				valveStatus[4] = 1;
-			}
-			else
-			{
-				s05_off();
-				valveStatus[4] = 0;
-			}
-			break;
-
-		case 6:
-			if(status)
-			{
-				s06_on();
-				valveStatus[5] = 1;
-			}
-			else
-			{
-				s06_off();
-				valveStatus[5] = 0;
-			}
-			break;
-
-		case 7:
-			if(status)
-			{
-				s07_on();
-				valveStatus[6] = 1;
-			}
-			else
-			{
-				s07_off();
-				valveStatus[6] = 0;
-			}
-			break;
-
-		case 8:
-			if(status)
-			{
-				s08_on();
-				valveStatus[7] = 1;
-			}
-			else
-			{
-				s08_off();
-				valveStatus[7] = 0;
-			}
-			break;
-
-		case 9:
-			if(status)
-			{
-				s09_on();
-				valveStatus[8] = 1;
-			}
-			else
-			{
-				s09_off();
-				valveStatus[8] = 0;
-			}
-			break;
-
-		case 10:
-			if(status)
-			{
-				s10_on();
-				valveStatus[9] = 1;
-			}
-			else
-			{
-				s10_off();
-				valveStatus[9] = 0;
-			}
-			break;
-
-		case 11:
-			if(status)
-			{
-				s11_on();
-				valveStatus[10] = 1;
-			}
-			else
-			{
-				s11_off();
-				valveStatus[10] = 0;
-			}
-			break;
-
-//		case 12:
-//			if(status)
-//			{
-//				f01_on();
-//				valveStatus[11] = 1;
-//			}
-//			else
-//			{
-//				f01_off();
-//				valveStatus[11] = 0;
-//			}
-//			break;
-//
-//		case 13:
-//			if(status)
-//			{
-//				f02_on();
-//				valveStatus[12] = 1;
-//			}
-//			else
-//			{
-//				f02_off();
-//				valveStatus[12] = 1;
-//			}
-//			break;
+		if(flag_debug)
+		{
+			Serial.println("");
+			Serial.print("type: ");
+			Serial.println(type);
+			Serial.print("size: ");
+			Serial.println(size);
+			Serial.print("sectorPrivate: ");
+			Serial.println(sectorPrivate);
+			Serial.print("status");
+			Serial.println(status);
+		}
 	}
 
 	if(makeLog)
@@ -1058,31 +475,140 @@ void valveInstr(uint8_t sectorPrivate, uint8_t status, uint8_t makeLog)
 		logMessage(sectorPrivate, status);
 	}
 }
-void turnAll_OFF()
+void nodeValve_setIs(uint16_t maxIs)
+{
+	uint8_t type = 2;
+	uint8_t size = 4;
+
+	uint8_t lbyte_valveSensor = maxIs;
+	uint8_t hbyte_valveSensor = maxIs >> 8;
+
+	Wire.beginTransmission(8);
+
+	Wire.write(type);				// 0
+	Wire.write(size);				// 1
+	Wire.write(lbyte_valveSensor);	// 2
+	Wire.write(hbyte_valveSensor);	// 3
+
+	Wire.endTransmission();
+	_delay_ms(500);								// wait a little bit for sector get stable
+}
+void nodeValve_getSettings()
+{
+	Wire.requestFrom(8, 15);		// request 13 bytes from slave device 8
+	int k = 0;
+	uint8_t cur[4];
+
+	while(Wire.available())	// slave may send less than requested
+	{
+		if(k < 11)
+			valveStatus[k] = Wire.read();
+		else
+			cur[k-11] = Wire.read();
+		k++;
+	}
+	_delay_ms(500);
+
+	valveIs = (cur[1] << 8) | cur[0];
+	nodeValve_maxIs = (cur[3] << 8) | cur[2];
+
+}
+
+void motor_stop()
+{
+	k1_off();
+	k2_off();
+	k3_off();
+	logMessage(12, 0);
+//	motorStatus = 0;
+}
+
+void turnAll_OFF_init()
 {
 	motor_stop();
-	int i;
-	for(i=1;i<12;i++)
-	{
-		valveInstr(i, 0, 0);
-	}
+	nodeValve_setInstr(0, 0, 0);
 
 	flag_timeMatch = 0;
+	timeSector = 0;
+	sectorCurrently = 0;
+	flag_Started = 0;
+}
+void turnAll_OFF(uint8_t error)
+{
+	motor_stop();
+	nodeValve_setInstr(0, 0, 0);
+
+	flag_timeMatch = 0;
+	flag_Started = 0;
+	sectorCurrently = 0;
+	timeSector = 0;
+
 	stateMode = 0;	// Manual
 	eeprom_write_byte(( uint8_t *)(addr_stateMode), stateMode);
 
-	timeSector = 0;
-	sectorCurrently = 0;
+	lastError = error;
+	Serial.print("er:");
+	Serial.println(error);
+	eeprom_write_byte((uint8_t *)(addr_lastError), lastError);
+}
+void motor_start()
+{
+//	switch (modeS)
+//	{
+//		case 0:
+//			break;
+//
+//		case 1:
+//			k1_on();
+//			k3_on();
+//			logMessage(12, 1);
+//			break;
+//
+//		case 2:
+			k1_on();
+			k3_on();
+			wdt_reset();
+			_delay_ms(((double) 100.0*motorTimerStart1));
+			wdt_reset();
+
+			k3_off();
+			uint32_t count = 0;
+			while(k3_readPin)
+			{
+				count++;
+				if(count>=120000)
+				{
+					k1_off();
+					k2_off();
+					k3_off();
+					turnAll_OFF(0x06);
+					return;
+				}
+			}
+//			Serial.print("FuCK: ");
+//			Serial.println(count);
+			_delay_ms(motorTimerStart2);
+			k2_on();
+
+			// carga, estado;
+			logMessage(12, 1);
+		//	Serial.print("Count = ");
+		//	Serial.println(count);
+//			break;
+//
+//		default:
+//			break;
+//	}
 }
 
 void summary_Print(uint8_t opt)
 {
-	char buffer[50];
+	char buffer[80];
 	int i;
 
 	switch (opt)
 	{
-		case 0:
+		case 0:		// main data. Date, clock, state, mode, period
 			sprintf(buffer,"%.2d:%.2d:%.2d", tm.Hour, tm.Minute, tm.Second);
 			Serial.println(buffer);
 			sprintf(buffer," %.2d/%.2d/%d ", tm.Day, tm.Month, tmYearToCalendar(tm.Year));
@@ -1102,12 +628,26 @@ void summary_Print(uint8_t opt)
 //			Serial.println(buffer);
 			break;
 
-		case 1:
+		case 1:		// time of sectors
 			for(i=0;i<11;i++)
 			{
 				sprintf(buffer,"t%d:%d, ",i+1, timeSectorVectorMin[i]);
 				Serial.print(buffer);
 			}
+			Serial.println("");
+
+			for(i=0;i<11;i++)
+			{
+				sprintf(buffer,"s%d:%d, ",i+1, valveSequence[i]);
+				Serial.print(buffer);
+			}
+			Serial.println("");
+			for(i=0;i<11;i++)
+			{
+				sprintf(buffer,"v%d:%d, ",i+1, valveStatus[i]);
+				Serial.print(buffer);
+			}
+			Serial.println("");
 			Serial.println("");
 //			sprintf(buffer,"t1:%d, t2:%d, t3:%d", timeSectorVectorMin[0], timeSectorVectorMin[1], timeSectorVectorMin[2]);
 //			Serial.println(buffer);
@@ -1119,13 +659,9 @@ void summary_Print(uint8_t opt)
 //			Serial.println(buffer);
 			break;
 
-		case 2:
-			for(i=0;i<11;i++)
-			{
-				sprintf(buffer,"s%d:%d, ",i+1, valveSequence[i]);
-				Serial.print(buffer);
-			}
-			Serial.println("");
+		case 2:		// wich valve will open in the process
+			sprintf(buffer,"le:%d s%d Pr:%d Is:%d ts:%d Ep:%d", lastError, sectorCurrently, PRess, valveIs, timeSector, count_timePipeB);
+			Serial.println(buffer);
 
 //			Serial.println(buffer);
 //			sprintf(buffer,"s5:%d, s6:%d, s7:%d, s8:%d", valveStatus[4], valveStatus[5], valveStatus[6], valveStatus[7]);
@@ -1134,28 +670,25 @@ void summary_Print(uint8_t opt)
 //			Serial.println(buffer);
 			break;
 
-		case 3:
-			sprintf(buffer,"M:%d Pr:%d Rth:%d", motorStatus, PRess, Th_readPin);
+		case 3:		// motor variables
+			sprintf(buffer,"M:%d Pr:%d Rth:%d Th%d Ka%d Kc%d", motorStatus, PRess, Th_readPin, Th_readPin, k1_readPin, k3_readPin);
 			Serial.println(buffer);
 			break;
 
-		case 4:
-			sprintf(buffer,"s%d c%d El:%d Ep:%d", sectorCurrently, sectorChanged, timeSector, count_timePipeB);
-			Serial.println(buffer);
-			//			sprintf(buffer,"Setor Atual: %d, Tempo restante: %d", stateSector, timeSector);
-			break;
-
-		case 5:
-			sprintf(buffer,"W%d B%d E%d P%d", flag_WDRF, flag_BORF, flag_EXTRF, flag_PORF);
+		case 4:		// Valves info
+			sprintf(buffer,"s%d Is%d c%d ft:%d", sectorCurrently, valveIs, sectorChanged, flag_timeOVF);
 			Serial.println(buffer);
 			break;
 
-		case 6:
-			sprintf(buffer,"LE%d K%d Th%d K%d k1d%d", lastError, k1_readPin, Th_readPin, k3_readPin, k1_readPinD);
-			Serial.println(buffer);
+		case 5:		// Time clock to match process
+			for(i=0;i<nTM;i++)
+			{
+				sprintf(buffer,"h%d: %.2d:%.2d",i+1, HourOnTM[i], MinOnTM[i]);
+				Serial.println(buffer);
+			}
 			break;
 
-		case 7:
+		case 6:		// History
 			for(i=(nLog-1); i>=0; i--)
 			{
 				sprintf(buffer,"%.2d-L%.2d|%d|%.2d:%.2d ",i+1, loadLog[i], loadStatus[i], hourLog[i], minuteLog[i]);
@@ -1164,10 +697,14 @@ void summary_Print(uint8_t opt)
 			}
 			break;
 
-		case 8:
-			Serial.print("I");
-			Serial.print(1000*calcIrms());
-			Serial.println("");
+		case 7: 	// Reference variables
+			sprintf(buffer,"le%d Pmin:%d Pmax:%d Imin:%d Imax:%d ImaxN:%d tPB:%d m1:%d m2:%d", lastError, minPRess, maxPRess, minIs, maxIs, nodeValve_maxIs, timePipeB, motorTimerStart1, motorTimerStart2);
+			Serial.println(buffer);
+			break;
+
+		case 8:		// Reset flags
+			sprintf(buffer,"W%d B%d E%d P%d", flag_WDRF, flag_BORF, flag_EXTRF, flag_PORF);
+			Serial.println(buffer);
 			break;
 
 		case 21:
@@ -1230,112 +767,26 @@ uint16_t timeSectorMemory(uint8_t sectorPrivate)
 	return 60*timeSectorVectorMin[sectorPrivate-1];
 }
 
-// Alarms
-uint8_t valveActVerify(uint8_t sectorPrivate)
+void valveIs_check()
 {
-	float I0a=0.0, I0b=0.0, I0c=0.0, Ia=0.0, Ib=0.0, Ic=0.0;
-	int I0m=0, Im=0;
-
-	uint8_t delayTime = 10;
-	uint8_t valveOk = 0;
-
-	if(valveSequence[sectorPrivate-1])
+	if(valveIs < minIs)
 	{
-		wdt_reset();
-		I0a = calcIrms();	// Read currently current;
-		_delay_ms(delayTime);
-		I0b = calcIrms();	// Read currently current;
-		_delay_ms(delayTime);
-		I0c = calcIrms();	// Read currently current;
-		_delay_ms(delayTime);
-
-		I0m = (int) (1.05*1000.0*(I0a+I0b+I0c)/3.0);
-//		Serial.print("I0m: ");
-//		Serial.println(I0m);
-
-		valveInstr(sectorPrivate, 1, 0);
-		_delay_ms(5*delayTime);
-
-		Ia = calcIrms();	// Read currently current;
-		_delay_ms(delayTime);
-		Ib = calcIrms();	// Read currently current;
-		_delay_ms(delayTime);
-		Ic = calcIrms();	// Read currently current;
-		_delay_ms(delayTime);
-
-		Im = (int) (1000.0*(Ia+Ib+Ic)/3.0);
-//		Serial.print("Im: ");
-//		Serial.println(Im);
-
-		valveInstr(sectorPrivate, 0, 0);
-
-		if(Im > ((int) I0m*Iconst))
-		{
-			valveOk = 1;
-		}
-		else
-		{
-			valveOk = 0;
-		}
+		turnAll_OFF(0x03);
 	}
-	else
-	{
-		valveOk = 0;
-	}
-
-	return valveOk;
 }
 void valveOpenVerify()
 {
 	wdt_reset();
-	if(motorStatus)
+	int i, valveWorking = 0;
+
+	for(i=0; i<11; i++)
 	{
-		uint8_t status = 0,i;
-
-		for(i=0;i<=11;i++)
-			status |= valveStatus[i];
-
-		if(!status)
-		{
-			turnAll_OFF();
-			summary_Print(21);
-			lastError = 0x01;
-			eeprom_write_byte((uint8_t *)(addr_lastError), lastError);
-//			enableSIM900_Send = 1;
-		}
+		valveWorking |= valveStatus[i];
 	}
 
-	wdt_reset();
-	if(motorStatus)
+	if(!valveWorking)
 	{
-		float Ia=0.0, Ib=0.0, Ic=0.0;
-		int Im=0;
-
-		Ia = calcIrms();	// Read currently current;
-		_delay_ms(100);
-		Ib = calcIrms();	// Read currently current;
-		_delay_ms(100);
-		Ic = calcIrms();	// Read currently current;
-		_delay_ms(100);
-		Im = (int) (1000.0*(Ia+Ib+Ic)/3.0);
-
-//		Serial.print("Im = ");
-//		Serial.println(Im);
-
-		if(Im<Imin)
-		{
-			stateMode = 0; //manual;
-
-//			sprintf(buffer,"Desligado no s[%.2d]!",stateSector);
-//			SIM900_sendSMS(buffer);
-			turnAll_OFF();
-			summary_Print(23);
-//			Serial.println("Im sensor Down!");
-
-			lastError = 0x03;
-			eeprom_write_byte((uint8_t *)(addr_lastError), lastError);
-//			enableSIM900_Send = 1;
-		}
+		turnAll_OFF(0x01);
 	}
 }
 void thermalSafe()
@@ -1351,117 +802,214 @@ void thermalSafe()
 //		Serial.println("B");
 		if(Th_readPin && !countThermal)
 		{
-			turnAll_OFF();
-//			Serial.println("Thermal Safe!");
-			lastError = 0x02;
-			eeprom_write_byte((uint8_t *)(addr_lastError), lastError);
-			summary_Print(22);
+			turnAll_OFF(0x02);
+//			summary_Print(22);
 		}
 	}
 }
 void pipeBrokenSafe()
 {
-	if(PRess<minPRess)
+	if(flag_BrokenPipeVerify)
 	{
-		turnAll_OFF();
-		lastError = 0x04;
-		eeprom_write_byte((uint8_t *)(addr_lastError), lastError);
-		summary_Print(24);
-//		Serial.println("PRessure Down!");
-	}
-}
-void pSafe()
-{
-	if(motorStatus)
-	{
-		if(PRess>=70)
+		if(PRess < minPRess)
 		{
-			turnAll_OFF();
-			summary_Print(25);
-//			Serial.println("PRessure HIGH!");
-			lastError = 0x05;
-			eeprom_write_byte((uint8_t *)(addr_lastError), lastError);
-//			enableSIM900_Send = 1;
+			turnAll_OFF(0x04);
+	//		summary_Print(24);
+	//		Serial.println("PRessure Down!");
 		}
 	}
 }
+void pipePRessSafe()
+{
+	if(PRess>=maxPRess)
+	{
+		turnAll_OFF(0x05);
+//		summary_Print(25);
+//		Serial.println("PRessure HIGH!");
+	}
+}
 
+// 20160204 - rever essa lógica!
 void process_Working()
 {
-	if(flag_timeOVF)
+	if(flag_timeOVF)	// down counter on TIMER 1 interrupt function
 	{
-		// Local
 		uint8_t flag_sectorActiveFound = 0;
-		uint8_t sectorNext = sectorCurrently + 1;
+		uint8_t sectorNext = (sectorCurrently + 1);
 
-		// identifica o proximo setor da sequencia e se está ativo.
-		if(sectorNext < sectorMax)
+		uint8_t A = 0;
+		uint8_t B = 0;
+		uint8_t C = 0;
+
+		// encontrar proximo setor no vetor AND funcionando;
+		if(sectorNext < valveAlloc)	//
 		{
 			do{
-				if(valveActVerify(sectorNext))
+				wdt_reset();
+				if(valveSequence[sectorNext-1])
 				{
-					flag_sectorActiveFound = 1;
+					float I1 = (float) valveIs;			// get I1
 
-					valveInstr(sectorCurrently, 0, 1);
-					valveInstr(sectorNext, 1, 1);
-					sectorCurrently = sectorNext;
-					timeSector = timeSectorMemory(sectorCurrently);
-					flag_timeOVF = 0;
+					nodeValve_setInstr(sectorNext, 1, 1);		// turn on the next sector
+					nodeValve_getSettings();					// ask for new I2 current
+					float I2 = (float) valveIs;
+					float I3 = I1*1.4;
 
-					if(!k1_readPin)
+					if(flag_debug)
 					{
-						motor_start();
+						Serial.print("I1:");
+						Serial.print(I1);
+						Serial.print(" I2:");
+						Serial.print(I2);
+						Serial.print(" I3:");
+						Serial.println(I3);
+					}
+
+					if((I2 > I3) && (I2 > minIs))
+					{
+						if(flag_debug)
+							Serial.println("Found!");
+
+						flag_sectorActiveFound = 1;
+
+						nodeValve_setInstr(sectorCurrently, 0, 1);
+						sectorCurrently = sectorNext;
+						timeSector = timeSectorMemory(sectorCurrently);
+						count_timePipeB = timePipeB;
+						flag_BrokenPipeVerify = 0;
+						flag_timeOVF = 0;
+
+						summary_Print(4);
+
+						if(!k1_readPin)
+						{
+							motor_start();
+						}
+					}
+					else
+					{
+						nodeValve_setInstr(sectorNext, 0, 1);		// turn off the next sector
+						if(flag_debug)
+						{
+							Serial.print("sNext1: ");
+							Serial.println(sectorNext);
+						}
+
+						sectorNext++;
+
+						if(sectorNext > valveAlloc)
+						{
+							sectorCurrently = 12;
+//							flag_sectorActiveFound = 1;
+//							sectorCurrently = valveAlloc + 1;
+						}
+
+						if(flag_debug)
+						{
+							Serial.print("sNext2: ");
+							Serial.println(sectorNext);
+
+							Serial.print("sCur2: ");
+							Serial.println(sectorCurrently);
+						}
 					}
 				}
 				else
 				{
-					// Incrementa e procura o proximo.
+					nodeValve_setInstr(sectorNext, 0, 1); // should not have this line here
 					sectorNext++;
-				}
-			}while(!flag_sectorActiveFound && (sectorNext < sectorMax));
-		}
 
-		if(sectorNext >= sectorMax)
+					if(sectorNext > valveAlloc)
+					{
+						sectorCurrently = 12;
+//						flag_sectorActiveFound = 1;
+//						sectorCurrently = valveAlloc + 1;
+					}
+
+					if(flag_debug)
+					{
+						Serial.print("sNext3: ");
+						Serial.println(sectorNext);
+
+						Serial.print("sCur3: ");
+						Serial.println(sectorCurrently);
+					}
+				}
+
+				// Sai do loop se flag_sectorActiveFound = 1
+				// OU
+				// se atinge setor maior do que valveAlloc;
+
+				A = !flag_sectorActiveFound;
+				B = !(sectorNext > valveAlloc);
+				C = A && B;
+
+//				A = !(flag_sectorActiveFound && valveSequence[sectorNext-1]);
+//				B = (sectorNext <= valveAlloc);
+//				C = A && B;
+
+	//			Serial.print("SectorC: ");
+	//			Serial.println(sectorCurrently);
+	//			Serial.print("SectorN: ");
+	//			Serial.println(sectorNext);
+	//			Serial.print("A: ");
+	//			Serial.println(A);
+	//			Serial.print("B: ");
+	//			Serial.println(B);
+	//			Serial.print("C: ");
+	//			Serial.println(C);
+
+			}while(C);
+			Serial.print("sectorCurrently: ");
+			Serial.println(sectorCurrently);
+	//		}while(!(flag_sectorActiveFound && valveSequence[sectorNext]) || (sectorNext <= valveAlloc));	// keep here while not find sector or max sextor allocated
+		}
+		else
 		{
-			valveInstr(sectorCurrently, 0, 1);
-			turnAll_OFF();
-			Serial.println("Done!");
-			lastError = 0x10;
-			_delay_ms(200);
-//			eeprom_write_byte()
+			turnAll_OFF(0x10);
+			uint32_t count = 0;
+			while(k1_readPin)
+			{
+				count++;
+				if(count>=120000)
+				{
+					k1_off();
+					k2_off();
+					k3_off();
+					turnAll_OFF(0x06);
+					return;
+				}
+			}
+
+			if(flag_debug)
+			{
+				Serial.println("Done!");
+			}
 		}
 	}
 }
-
 void process_Programmed()
 {
-	if(((tm.Hour == HourOn) && (tm.Minute == MinOn)))
-	{
-		flag_timeMatch = 1;
-	}
-
-	if(((tm.Hour == HourOff) && (tm.Minute == MinOff)) || !periodState)
-	{
-		flag_timeMatch = 0;
-	}
-
 	if(flag_timeMatch)
 	{
+		flag_timeMatch = 0;//^= flag_timeMatch;
+		lastError = 0x00;
+		flag_Started = 1;
+	}
+
+	if(flag_Started)
 		process_Working();
-	}
-	else
-	{
-		// Over time detected!!!!
-		if(motorStatus)
-		{
-			turnAll_OFF();
-			summary_Print(27);
-			lastError = 0x07;
-			eeprom_write_byte((uint8_t *)(addr_lastError), lastError);
-//			enableSIM900_Send = 1;
-		}
-	}
 }
+void process_valveTest()
+{
+	wdt_reset();
+	nodeValve_setInstr(sectorCurrently, 1, 0);
+	_delay_ms(4000);
+	wdt_reset();
+	nodeValve_setInstr(sectorCurrently, 0, 0);
+	_delay_ms(4000);
+}
+
 void process_Mode()
 {
 	switch(stateMode)
@@ -1472,6 +1020,14 @@ void process_Mode()
 
 		case 1: // nightMode
 			process_Programmed();
+			break;
+
+		case 9:
+			process_valveTest();
+			break;
+
+		default:
+			stateMode = 0;
 			break;
 
 //		case 2:
@@ -1489,54 +1045,90 @@ void process_Mode()
 	}
 }
 
-void periodVerify0()
+void check_period()				// Season time verify
 {
-	if (((tm.Hour == HourOn) && (tm.Minute >= MinOn)) || (tm.Hour > HourOn)
-			|| (tm.Hour < HourOff)
-			|| ((tm.Hour == HourOff) && (tm.Minute < MinOff)))
+	if(((tm.Hour == HourOn) && (tm.Minute == MinOn)) || (tm.Hour > HourOn) || (tm.Hour < HourOff) || ((tm.Hour == HourOff) && (tm.Minute < MinOff)))
 	{
-		periodState = 1; //greenTime;
-		flag04 = 1;
-		flag05 = 0;
+		periodo = greenTime;
+
+		if(flag01)
+		{
+			flag01 = 0;
+		}
 	}
 
-	if (((tm.Hour == HourOff) && (tm.Minute >= MinOff))
-			|| ((tm.Hour > HourOff) && (tm.Hour < HourOn))
-			|| ((tm.Hour == HourOn) && (tm.Minute < MinOn)))
+	if (((tm.Hour == HourOff) && (tm.Minute >= MinOff))	|| ((tm.Hour > HourOff) && (tm.Hour < HourOn))	|| ((tm.Hour == HourOn) && (tm.Minute < MinOn)))
 	{
-		periodState = 0; // redTime;
-		flag04 = 0;
-		flag05 = 1;
+		periodo = redTime;
+
+		flag01 = 1;
+	}
+}
+void check_timeMatch()			// matching time verify
+{
+	uint8_t i, nTM_var=0;
+	if(!motorStatus)
+	{
+//		Serial.println("A");
+		if(stateMode)
+		{
+//			Serial.println("B");
+			switch (stateMode)
+			{
+			case 1:
+//				Serial.println("C");
+				nTM_var = 1;
+				break;
+
+			case 2:
+				nTM_var = nTM;
+				break;
+			}
+
+			for(i=0;i<nTM_var;i++)
+			{
+//				Serial.println("D");
+				if((tm.Hour == HourOnTM[i]) && (tm.Minute == MinOnTM[i]))
+				{
+//					Serial.println("E");
+					flag_timeMatch = 1;
+				}
+			}
+		}
 	}
 }
 
 void refreshVariables()
 {
-	motorStatus = k1_readPin;
-
-	if(motorStatus || k1_readPinD)
-		thermalSafe();
-
 	if (flag_1s)
 	{
 		flag_1s = 0;
 
-		PRess = get_Pressure();
+		motorStatus = k1_readPin;		// Motor status refresh
 
-		if(motorStatus)
+		nodeValve_getSettings();			// Get valves info
+		PRess = get_Pressure();			// Get pipe pressure
+
+		if(k1_readPin)
 		{
-			valveOpenVerify();		// AND op with all output valves;
-			pSafe();				// Verify maximum pressure;
-
-			if(flag_BrokenPipeVerify)
-				pipeBrokenSafe();		// Verify pipe low pressure;
+			thermalSafe();				// thermal safe check;
+			valveOpenVerify();			// AND op with all output valves;
+			pipePRessSafe();			// Verify maximum pressure;
+			valveIs_check();			// check if there is current on Is sensor;
+			pipeBrokenSafe();			// Verify pipe low pressure;
 		}
 
 		RTC.read(tm);				// RTC fetch;
-		periodVerify0();			// Period time refresh;
+		check_period();
+		check_timeMatch();
+
+		if(flag_debug)
+		{
+			summary_Print(debugCommand);
+		}
 	}
 }
-void refreshTimeSectors()
+void refreshSectorSetup()
 {
 	int i;
 	for(i=0;i<11;i++)
@@ -1545,50 +1137,50 @@ void refreshTimeSectors()
 	for(i=0;i<11;i++)
 		valveSequence[i] = eeprom_read_byte((uint8_t *)(i+addr_valveSequence));
 }
-//void refreshCelPhoneNumber()
-//{
-//	int i;
-//	uint8_t flag_Error01 = 0;
-//	char buffer[20];
-//	for(i=0;i<11;i++)
-//	{
-//		// Verify is there is any digit bigger the 9
-//		if(eeprom_read_byte((uint8_t *)(i+addr_celNumber))>9)
-//		{
-//			flag_Error01 = 1;
-////			eeprom_write_byte(( uint8_t *)(i+23), 9);
-//		}
-//	}
-//
-//	if(!flag_Error01)
-//	{
-//		for(i=0;i<11;i++)
-//			celPhoneNumber[i] = eeprom_read_byte((uint8_t *)(i+addr_celNumber));
-//
-//		sprintf(celPhoneNumber_str,"%d%d%d%d%d%d%d%d%d%d%d",celPhoneNumber[0],celPhoneNumber[1],celPhoneNumber[2],celPhoneNumber[3],celPhoneNumber[4],celPhoneNumber[5],celPhoneNumber[6],celPhoneNumber[7],celPhoneNumber[8],celPhoneNumber[9],celPhoneNumber[10]);
-//	}
-//	else
-//	{
-//		strcpy(celPhoneNumber_str,"27988081875");
-//		sprintf(buffer,"Restore Cel N. Error!");
-////		SIM900_sendSMS(buffer);
-//		Serial.println("Restore Cel N. Error!");
-//	}
-//}
 void refreshStoredData()
 {
+	refreshSectorSetup();				// Refresh variables
+
 	stateMode = eeprom_read_byte((uint8_t *)(addr_stateMode));
 	lastError = eeprom_read_byte((uint8_t *)(addr_lastError));
 
-	powerOn_min_Standy = eeprom_read_byte((uint8_t *)(addr_standBy_min));
-	powerOn_min = powerOn_min_Standy;
+//	flag_iValveCheck = eeprom_read_byte((uint8_t *)(addr_iValveCheck));
+//	powerOn_min_Standy = eeprom_read_byte((uint8_t *)(addr_standBy_min));
+//	powerOn_min = powerOn_min_Standy;
+//	Iconst = (eeprom_read_byte((uint8_t *)(addr_Iper)))/100.0 + 1.0;
 
-//	uint8_t lbyte, hbyte;
-//	hbyte = eeprom_read_byte((uint8_t *)(addr_LevelRef+1));
-//	lbyte = eeprom_read_byte((uint8_t *)(addr_LevelRef));
+	minPRess = eeprom_read_byte((uint8_t *)(addr_minPRess));
+	maxPRess = eeprom_read_byte((uint8_t *)(addr_maxPRess));
 
-//	reservoirLevelRef = ((hbyte << 8) | lbyte);
+	uint8_t lbyte, hbyte;
+	hbyte = eeprom_read_byte((uint8_t *)(addr_minIs+1));
+	lbyte = eeprom_read_byte((uint8_t *)(addr_minIs));
+	minIs = ((hbyte << 8) | lbyte);
 
+	hbyte = eeprom_read_byte((uint8_t *)(addr_maxIs+1));
+	lbyte = eeprom_read_byte((uint8_t *)(addr_maxIs));
+	maxIs = ((hbyte << 8) | lbyte);
+
+	hbyte = eeprom_read_byte((uint8_t *)(addr_timePipeB+1));
+	lbyte = eeprom_read_byte((uint8_t *)(addr_timePipeB));
+	timePipeB = ((hbyte << 8) | lbyte);
+
+//	hbyte = eeprom_read_byte((uint8_t *)(addr_motorTimerStart1+1));
+//	lbyte = eeprom_read_byte((uint8_t *)(addr_motorTimerStart1));
+//	motorTimerStart1 = ((hbyte << 8) | lbyte);
+	motorTimerStart1 = eeprom_read_byte((uint8_t *)(addr_motorTimerStart1));
+
+	hbyte = eeprom_read_byte((uint8_t *)(addr_motorTimerStart2+1));
+	lbyte = eeprom_read_byte((uint8_t *)(addr_motorTimerStart2));
+	motorTimerStart2 = ((hbyte << 8) | lbyte);
+
+	nTM = eeprom_read_byte((uint8_t *)(addr_nTM));
+	uint8_t i;
+	for(i=0;i<9;i++)
+	{
+		HourOnTM[i] = eeprom_read_byte((uint8_t *)(addr_HourOnTM+i));
+		MinOnTM[i] = eeprom_read_byte((uint8_t *)(addr_MinOnTM+i));
+	}
 }
 
 void comm_Bluetooth()
@@ -1670,145 +1262,145 @@ void comm_Bluetooth()
 		memset(sInstrBluetooth,0,sizeof(sInstrBluetooth));
 	}
 }
-//void comm_SIM900()
-//{
-//	// Rx - Always listening
-////	uint8_t j1 =0;
-//	while((Serial.available()>0))	// Reading from serial
-//	{
-//		inChar = Serial.read();
-//		Serial.write(inChar);
-//
-//		if(inChar=='$')
+void comm_SIM900()
+{
+	// Rx - Always listening
+//	uint8_t j1 =0;
+	while((Serial.available()>0))	// Reading from serial
+	{
+		inChar = Serial.read();
+		Serial.write(inChar);
+
+		if(inChar=='$')
+		{
+			jSIM900 = 0;
+			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
+			flag_frameStartSIM900 = 1;
+//			Serial.println("Frame Start!");
+		}
+
+		if(flag_frameStartSIM900)
+		{
+			sInstrSIM900[jSIM900] = inChar;
+//			Serial.write(sInstrSIM900[j1]);
+		}
+
+		jSIM900++;
+
+		if(jSIM900>=sizeof(sInstrSIM900))
+		{
+			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
+			jSIM900=0;
+			Serial.println("ZEROU! sIntr SIM900 Buffer!");
+		}
+
+		if(inChar==';')
+		{
+			if(flag_frameStartSIM900)
+			{
+//				Serial.println("Frame Stop!");
+				flag_frameStartSIM900 = 0;
+				rLengthSIM900 = jSIM900;
+//				j1 = 0;
+				enableTranslate_SIM900 = 1;
+			}
+		}
+
+
+		// Variables for check if SIM900 is alive.
+		flag_SIM900_checkAlive = 0;
+		count_SIM900_timeout = 0;
+		count_30s = 0;
+
+//		if(flag_SIM900_checkAlive)
 //		{
-//			j1 = 0;
-//			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
-//			flag_frameStartSIM900 = 1;
-////			Serial.println("Frame Start!");
-//		}
-//
-//		if(flag_frameStartSIM900)
-//		{
-//			sInstrSIM900[j1] = inChar;
-////			Serial.write(sInstrSIM900[j1]);
-//		}
-//
-//		j1++;
-//
-//		if(j1>=sizeof(sInstrSIM900))
-//		{
-//			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
-//			j1=0;
-//			Serial.println("ZEROU! sIntr SIM900 Buffer!");
-//		}
-//
-//		if(inChar==';')
-//		{
-//			if(flag_frameStartSIM900)
+//			if(inChar=='K')
 //			{
-////				Serial.println("Frame Stop!");
-//				flag_frameStartSIM900 = 0;
-//				rLengthSIM900 = j1;
-////				j1 = 0;
-//				enableTranslate_SIM900 = 1;
+//				enableSIM900_checkAliveCompare = 1;
+//				flag_SIM900_checkAlive = 0;
+//				count_SIM900_timeout = 0;
+//				j1 = 0;
 //			}
 //		}
+	}
+
+	// PC to SIM900
+	while(Serial.available() > 0)
+		Serial.write(Serial.read());
+
+	if(enableTranslate_SIM900)
+	{
+		jSIM900 = 0;
+		enableTranslate_SIM900 = 0;
+
+		char *pi1, *pf1;
+		pi1 = strchr(sInstrSIM900,'$');
+		pf1 = strchr(sInstrSIM900,';');
+
+		if(pi1!=NULL)
+		{
+//			Serial.println("pi!=NULL");
+			uint8_t l1=0;
+			l1 = pf1 - pi1;
+
+			int i;
+			for(i=1;i<=l1;i++)
+			{
+				sInstr[i-1] = pi1[i];
+//				Serial.write(sInstr[i-1]);
+			}
+			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
+			Serial.println(sInstr);
+
+			enableDecode = 1;
+			enableSIM900_Send = 1;
+		}
+		else
+		{
+			Serial.println("Error 404!");
+			Serial.write(pi1[0]);
+			Serial.write(pf1[0]);
+		}
+	}
+
+	// Special Functions  CHECK ALIVE!
+//	if(flag_SIM900_checkAlive)
+//	{
+//		if(count_SIM900_timeout > 5)
+//		{
+//			flag_SIM900_checkAlive = 0;
+//			count_SIM900_timeout = 0;
+//			Serial.println("SIM900 Check Alive TIMEOUT!");
 //
-//
-//		// Variables for check if SIM900 is alive.
-//		flag_SIM900_checkAlive = 0;
-//		count_SIM900_timeout = 0;
-//		count_30s = 0;
-//
-////		if(flag_SIM900_checkAlive)
-////		{
-////			if(inChar=='K')
-////			{
-////				enableSIM900_checkAliveCompare = 1;
-////				flag_SIM900_checkAlive = 0;
-////				count_SIM900_timeout = 0;
-////				j1 = 0;
-////			}
-////		}
+//			SIM900_power();
+//			if((minute()*60 + second())<90)
+//			{
+//				sprintf(buffer,"- Vassal Controller Started! -");
+//				SIM900_sendSMS(buffer);
+//			}
+//		}
 //	}
-//
-//	// PC to SIM900
-//	while(Serial.available() > 0)
-//		Serial.write(Serial.read());
-//
-//	if(enableTranslate_SIM900)
+
+//	if(enableSIM900_checkAliveCompare)
 //	{
+//		enableSIM900_checkAliveCompare = 0;
 //		j1 = 0;
-//		enableTranslate_SIM900 = 0;
 //
-//		char *pi1, *pf1;
-//		pi1 = strchr(sInstrSIM900,'$');
-//		pf1 = strchr(sInstrSIM900,';');
+//		char *p;
+//		p = strchr(sInstrSIM900,'O');
 //
-//		if(pi1!=NULL)
+//		if(p[0] == 'O' && p[1] == 'K')
 //		{
-////			Serial.println("pi!=NULL");
-//			uint8_t l1=0;
-//			l1 = pf1 - pi1;
-//
-//			int i;
-//			for(i=1;i<=l1;i++)
-//			{
-//				sInstr[i-1] = pi1[i];
-////				Serial.write(sInstr[i-1]);
-//			}
-//			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
-//			Serial.println(sInstr);
-//
-//			enableDecode = 1;
-//			enableSIM900_Send = 1;
+//			flag_SIM900_died = 0;
+//			Serial.println("Alive!");
 //		}
 //		else
 //		{
-//			Serial.println("Error 404!");
-//			Serial.write(pi1[0]);
-//			Serial.write(pf1[0]);
+//			Serial.println("Is DEAD??");
+////			flag_SIM900_died = 1;
 //		}
 //	}
-//
-//	// Special Functions  CHECK ALIVE!
-////	if(flag_SIM900_checkAlive)
-////	{
-////		if(count_SIM900_timeout > 5)
-////		{
-////			flag_SIM900_checkAlive = 0;
-////			count_SIM900_timeout = 0;
-////			Serial.println("SIM900 Check Alive TIMEOUT!");
-////
-////			SIM900_power();
-////			if((minute()*60 + second())<90)
-////			{
-////				sprintf(buffer,"- Vassal Controller Started! -");
-////				SIM900_sendSMS(buffer);
-////			}
-////		}
-////	}
-//
-////	if(enableSIM900_checkAliveCompare)
-////	{
-////		enableSIM900_checkAliveCompare = 0;
-////		j1 = 0;
-////
-////		char *p;
-////		p = strchr(sInstrSIM900,'O');
-////
-////		if(p[0] == 'O' && p[1] == 'K')
-////		{
-////			flag_SIM900_died = 0;
-////			Serial.println("Alive!");
-////		}
-////		else
-////		{
-////			Serial.println("Is DEAD??");
-//////			flag_SIM900_died = 1;
-////		}
-////	}
-//}
+}
 void comm_SerialPC()
 {
 
@@ -1860,6 +1452,8 @@ $0X;				Verificar detalhes - Detalhes simples (tempo).
 	$06;			- Ultimo erro, leitura de contatores e rele termico;
 	$07;			- Histórico Liga/Desliga das cargas;
 	$08;			- Corrente no sensor das valvulas;
+		$08:15;		- 15%. Valor de referência do sensor de corrente.
+		$08:00;		- Não verifica sensor de corrente das válvulas;
 	$09;			- Reinicia o sistema.
 
 $1HHMMSS;		Ajusta o horário do sistema;
@@ -1872,37 +1466,43 @@ $3X;			Acionamento do motor;
 	$31;		liga (CUIDADO! Verifique se há válvula aberta antes de acionar o motor!);
 	$30;		desliga;
 
-$4sNN:V;		acionamento das válvulas sem verificação (Não é seguro!);
-$4f03:1;		- Liga o setor 3;
-	$4f10:0;		- Desliga o setor 4;
-	$4f12:1;		- Liga a válvula da fertirriação que enche a caixa;
-	$4f13:0;		- Desliga a válvula da fertirigação que esvazia a caixa;
-
-Função 4 com “s”: Testa se o setor 2 está funcionando, caso esteja, mantém o 02 ligado e desliga o setor anterior;
-
 $4sNN:V;		Modo seguro de acionamento (somente para válvulas dos piquetes);
-	$4s02:1;	- Liga o setor 2 e desliga setor anterior;
-	$4s03:1;	- Liga o setor 3 e desliga setor anterior;
-	$4s03:0;	- Desliga o setor 3 se estiver ligado;
+	$4c01:1;	- Liga setor 1 e desliga o anterior ligado;
+	$4f02:1;	- Liga setor 2 (mesmo que tenha outro ligado);
+	$4t00:30;	- Configura todos setores para 30 minutos;
+	$4t02:47;	- Configura tempo do setor 2 para 47 minutos;
+	$4s02:1;	- Configura setor 2 para ligar;
+	$4s00:1;	- Configura todos setores para ligar;
+	$4s00:0;	- Desconfigura todos setores;
+	$4s03:0;	- Configura setor 3 para não ligar;
 
-$5tNN:MM;		Coloca o tempo em minutos do determinado setor (2 dígitos);
-	$5t02:09;		- ajusta para 09 minutos o tempo do setor 02;
-	$5t11:54;		- ajusta para 54 minutos o tempo do setor 11;
-	$5t09:00;		- zera o setor 9 não deixando ligar à noite;
-	$5t00:05;		- Todos setores com 5 minutos;
+	$4z:0123;	- Configura a variável timeSector para 123 segundos;
 
 $5sNN:MM;		Ativa o setor para sequencia de irrigação;
-	$5s02:1;		- adiciona setor 2 na sequencia;
-	$5s11:0;		- Remove setor 11 da sequencia;
-	$5s00:1;		- adiciona todos setores;
-	$5s00:1;		- remove todos setores;
+	$5:h1:2130;		- configura primeiro horario de acionamento (h1) para às 21:30 horas;
+	$5:h1:0530;		- configura primeiro horario de acionamento (h1) para às 05:30 horas;
+	$5:n:2;			- habilita somente os 2 primeiros horários programados;
 
-$6X;		Modo de funcionamento
+$6X;			Modo de funcionamento
 	$60; 		- Coloca no modo manual (desligado). DESLIGA TODAS AS CARGAS!;
-	$61;		- Programa para ligar às 21:30 horas do mesmo dia.
-	$62:s01:23;	- Liga a noite somente o setor 1 durante 23 min.
+	$61;		- Programa para ligar às X horas;
+
+	$69:0:01;	- Funcao
+	$69:1:02
+
 
 	$69:s03;	- Testa o setor 3 se está funcionando e retorna SMS;
+
+$7:				Parâmetros
+	$7:i1:050;		- Corrente [mA] mínima para funcionamento em regime permanente;
+	$7:i2:200;		- Corrente [mA] máxima aceitável no solenoide;
+	$7:p1:050;		- Pressão [m.c.a.] mínima na tubulação em regime permanente;
+	$7:p2:070;		- Pressão [m.c.a.] máxima instantânea na tubulação;
+	$7:t1:180;		- Tempo para ligar alarme de baixa pressão [s];
+	$7:m1:56;		- Tempo partida estrela triangulo sendo 56*100 ms ou 5,6 s. Aceitando no máximo 6,5 segundos;
+	$7:m1:65;		- Máximo tempo de troca dos contatores devido máxima variável para função _delay_ms();
+	$7:m2:250;		- Tempo partida estrela triangulo [ms];
+
 
 $727988081875;		Troca número de telefone
 */
@@ -1931,7 +1531,7 @@ $727988081875;		Troca número de telefone
 		switch (opcode)
 		{
 // --------------------------------------------------------------------------------------
-			case 0:		// Check status
+			case 0:	// Check status
 			{
 				aux[0] = '0';
 				aux[1] = sInstr[1];
@@ -1947,13 +1547,6 @@ $727988081875;		Troca número de telefone
 //							Serial.println("SIM900 Power!");
 //						break;
 
-//						case 8:	// Reset SIM900
-//							SIM900_reset();
-//							flag_SIM900_checkAlive = 0;
-//							flag_SIM900_died = 0;
-//							count_30s = 0;
-//							break;
-
 						case 9:	// Reset system
 //								Serial.println("Rebooting system...");
 								wdt_enable(WDTO_15MS);
@@ -1965,11 +1558,44 @@ $727988081875;		Troca número de telefone
 							break;
 					}
 				}
+				else if(sInstr[2] == ':' && sInstr[4] == ';')	// $00:1;
+				{
+					aux[0] = '0';
+					aux[1] = sInstr[3];
+					aux[2] = '\0';
+					flag_debug = (uint8_t) atoi(aux);
+					debugCommand = statusCommand;
+//					switch (statusCommand)
+//					{
+//						case 8:
+//							aux[0] = sInstr[3];
+//							aux[1] = sInstr[4];
+//							aux[2] = '\0';
+//							uint8_t Iper = (uint8_t) atoi(aux);
+//
+//							if(Iper)
+//							{
+//								Iconst = Iper/100.0 + 1.0;
+//								Serial.println(Iconst);
+//								eeprom_write_byte((uint8_t *)(addr_Iper), Iper);
+//
+//								flag_iValveCheck = 1;
+//								eeprom_write_byte((uint8_t *)(addr_iValveCheck), flag_iValveCheck);
+//							}
+//							else
+//							{
+//								flag_iValveCheck = 0;
+//								eeprom_write_byte((uint8_t *)(addr_iValveCheck), flag_iValveCheck);
+//							}
+//
+//							break;
+//					}
+
+				}
 			}
 			break;
-
 // --------------------------------------------------------------------------------------
-			case 1:		// Set-up clock
+			case 1:	// Set-up clock
 			{
 				// Getting the parameters
 				aux[0] = sInstr[1];
@@ -1992,10 +1618,8 @@ $727988081875;		Troca número de telefone
 				summary_Print(0);
 			}
 				break;
-
 // -----------------------------------------------------------------
-			case 2:		// Set-up date
-
+			case 2:	// Set-up date
 				// Getting the parameters
 				aux[0] = sInstr[1];
 				aux[1] = sInstr[2];
@@ -2020,10 +1644,8 @@ $727988081875;		Troca número de telefone
 				summary_Print(0);
 
 				break;
-
 // -----------------------------------------------------------------
-			case 3:		// Set motor ON/OFF
-
+			case 3:	// Set motor ON/OFF
 				uint8_t motorCommand;
 
 				aux[0] = '0';
@@ -2040,104 +1662,73 @@ $727988081875;		Troca número de telefone
 
 				summary_Print(3);
 				break;
-
 // -----------------------------------------------------------------
 			case 4:	// ON OFF sectors
-				if(sInstr[1] == 'f')
+				if(sInstr[1] == 'f' && sInstr[4]==':' && sInstr[6]==';')	// $4f02:1; (turn ON sector 2)
 				{
 					aux[0] = sInstr[2];
 					aux[1] = sInstr[3];
 					aux[2] = '\0';
 					uint8_t sector = (uint8_t) atoi(aux);
 
-					// sInstr[4] == :
 					aux[0] = '0';
 					aux[1] = sInstr[5];
 					aux[2] = '\0';
 					uint8_t sectorCommand = (uint8_t) atoi(aux);
 
-					valveInstr(sector, sectorCommand, 1);
+					nodeValve_setInstr(sector, sectorCommand, 1);
+					_delay_ms(250);
+					nodeValve_getSettings();
+					sectorCurrently = sector;
+					count_timePipeB = timePipeB;
+					flag_BrokenPipeVerify = 0;
 
-					summary_Print(4);
+					summary_Print(2);
 				}
-
-				if(sInstr[1] == 's')
-				{
-					aux[0] = sInstr[2];				// Get sector number
-					aux[1] = sInstr[3];
-					aux[2] = '\0';
-					uint8_t sector = (uint8_t) atoi(aux);
-
-					aux[0] = '0';
-					aux[1] = sInstr[5];				// Get status, 1-ON or 0-OFF
-					aux[2] = '\0';
-					uint8_t sectorCommand = (uint8_t) atoi(aux);
-
-//					if(enableSIM900_Send)
-//					{
-//						wdt_reset();
-//						_delay_ms(5000);
-//						wdt_reset();
-//					}
-
-					if(sectorCommand)
-					{
-						if(valveActVerify(sector))
-						{
-							if(!sectorCurrently)
-							{
-								valveInstr(sectorCurrently, 0, 1);
-							}
-
-							valveInstr(sector, sectorCommand, 1);
-							sectorChanged = 1;
-							sectorCurrently = sector;
-						}
-						else
-						{
-							sectorChanged = 0;
-						}
-					}
-					else
-					{
-						valveInstr(sector, sectorCommand, 1);
-						sectorChanged = 1;
-
-						if(sector == sectorCurrently)
-						{
-							sectorCurrently = 0;
-						}
-					}
-					summary_Print(4);
-
-//					if(sectorChanged)
-//					{
-//						if(sectorCommand)
-//						{
-
-//						}
-//						else
-//						{
-//							sectorCurrently = 0;
-//						}
-//					}
-//						valveInstr(stateSector, 0);
-//						stateSector = sector;
-//						valveInstr(sectorCurrently, 0);
-				}
-				break;
-
-// -----------------------------------------------------------------
-			case 5:
-//				5t01:23;
-				if(sInstr[1] == 't')
+				if(sInstr[1] == 'c' && sInstr[4]==':' && sInstr[6]==';')	// $4c03:1; (turn ON sector 3)
 				{
 					aux[0] = sInstr[2];
 					aux[1] = sInstr[3];
 					aux[2] = '\0';
 					uint8_t sector = (uint8_t) atoi(aux);
 
-					// sInstr[4] == :
+					aux[0] = '0';
+					aux[1] = sInstr[5];
+					aux[2] = '\0';
+					uint8_t sectorCommand = (uint8_t) atoi(aux);
+
+					nodeValve_setInstr(sector, sectorCommand, 1);
+					if(sectorCommand)
+					{
+						nodeValve_setInstr(sectorCurrently, 0, 1);
+						sectorCurrently = sector;
+						count_timePipeB = timePipeB;
+						flag_BrokenPipeVerify = 0;
+					}
+					_delay_ms(250);
+					nodeValve_getSettings();
+					summary_Print(2);
+				}
+				if(sInstr[1] == 'z' && sInstr[2]==':' && sInstr[7]==';')	// 4z:0123;
+				{
+					aux2[0] = sInstr[3];
+					aux2[1] = sInstr[4];
+					aux2[2] = sInstr[5];
+					aux2[3] = sInstr[6];
+					aux2[4] = '\0';
+
+					timeSector = (uint16_t) atoi(aux2);
+				}
+
+				if(sInstr[1] == 't' && sInstr[4]==':' && sInstr[7]==';')	// 4t01:23;
+				{
+					// Get sector number
+					aux[0] = sInstr[2];
+					aux[1] = sInstr[3];
+					aux[2] = '\0';
+					uint8_t sector = (uint8_t) atoi(aux);
+
+					// get sector time
 					uint8_t sectorTimeChange;
 					aux[0] = sInstr[5];
 					aux[1] = sInstr[6];
@@ -2147,7 +1738,7 @@ $727988081875;		Troca número de telefone
 					if(!sector)
 					{
 						int i;
-						for(i=0;i<sectorMax;i++)
+						for(i=0;i<valveAlloc;i++)
 						{
 							eeprom_write_byte((uint8_t *)(i+addr_timeSector), sectorTimeChange);
 						}
@@ -2156,43 +1747,82 @@ $727988081875;		Troca número de telefone
 					{
 						eeprom_write_byte(( uint8_t *)(sector-1+addr_timeSector), sectorTimeChange);
 					}
-					refreshTimeSectors();
+					refreshSectorSetup();
 					summary_Print(1);
 				}
-				//	5s02:0;
-				if(sInstr[1] == 's')
+				if(sInstr[1] == 's' && sInstr[4]==':' && sInstr[6]==';')	//	4s02:0;
 				{
-					aux[0] = sInstr[2];
-					aux[1] = sInstr[3];
+					// Get sector number
+					aux[0] = sInstr[2];	//0
+					aux[1] = sInstr[3];	//2
 					aux[2] = '\0';
 					uint8_t sector = (uint8_t) atoi(aux);
 
-					// sInstr[4] == :
+					// get status command (set ON=1 or Set off=0)
 					aux[0] = '0';
-					aux[1] = sInstr[5];
+					aux[1] = sInstr[5];	//0
 					aux[2] = '\0';
 					uint8_t sectorSequenceChange = (uint8_t) atoi(aux);
 
-					if(!sector)
+					if(!sector)	// If sector num =0, then turn OFF all sectors
 					{
 						int i;
-						for(i=0;i<sectorMax;i++)
+						for(i=0;i<valveAlloc;i++)
 						{
 							eeprom_write_byte((uint8_t *)(i+addr_valveSequence), sectorSequenceChange);
 						}
 					}
-					else
+					else		// Else, set or clear the specified sector;
 					{
 						eeprom_write_byte((uint8_t *)(sector-1+addr_valveSequence), sectorSequenceChange);
 					}
-					refreshTimeSectors();
-					summary_Print(2);
+					refreshSectorSetup();
+					summary_Print(1);
 				}
-
 				break;
-
 // -----------------------------------------------------------------
-			case 6:
+			case 5: // Command is $5:h1:2130;
+			{
+				if(sInstr[1]==':' && sInstr[2]=='h' && sInstr[4]==':' && sInstr[9]==';')
+				{
+					aux[0] = '0';
+					aux[1] = sInstr[3];
+					aux[2] = '\0';
+					uint8_t indexV = (uint8_t) atoi(aux);
+
+					aux[0] = sInstr[5];
+					aux[1] = sInstr[6];
+					aux[2] = '\0';
+					HourOnTM[indexV-1] = (uint8_t) atoi(aux);
+					eeprom_write_byte(( uint8_t *)(addr_HourOnTM+indexV-1), HourOnTM[indexV-1]);
+
+					aux[0] = sInstr[7];
+					aux[1] = sInstr[8];
+					aux[2] = '\0';
+					MinOnTM[indexV-1] = (uint8_t) atoi(aux);
+					eeprom_write_byte(( uint8_t *)(addr_MinOnTM+indexV-1), MinOnTM[indexV-1]);
+
+					summary_Print(5);
+				}
+				else if(sInstr[1]==':' && sInstr[2]=='n' && sInstr[3]==':' && sInstr[5]==';')
+				{
+					aux[0] = '0';
+					aux[1] = sInstr[4];
+					aux[2] = '\0';
+
+					nTM = (uint8_t) atoi(aux);
+					eeprom_write_byte(( uint8_t *)(addr_nTM), nTM);
+
+					summary_Print(5);
+				}
+				else if(sInstr[1]==';')
+				{
+					summary_Print(5);
+				}
+			}
+			break;
+// -----------------------------------------------------------------
+			case 6: // Program set
 			{
 				// 6x;
 				// 63:sxx;
@@ -2204,88 +1834,205 @@ $727988081875;		Troca número de telefone
 				switch (setCommand)
 				{
 					case 0:
-						turnAll_OFF();
+						stateMode = 0;
+						Serial.println("rstCommand");
+						turnAll_OFF(0x00);
 						break;
 
 					case 1:
-						stateMode = 1; //nightMode;
+						stateMode = 1; //Programed mode;
 						eeprom_write_byte(( uint8_t *)(addr_stateMode), stateMode);
 						break;
 
-//					case 2:
-//						// Turn on just one sector at night.
-//						//	62:s01:30;
-//						if((sInstr[2] == ':')&&(sInstr[3] == 's'))
-//						{
-//							aux[0] = sInstr[4];
-//							aux[1] = sInstr[5];
+					case 9:
+//						if((sInstr[2] == ':') && (sInstr[4] == ':') && (sInstr[7] == ';'))
+						if((sInstr[2] == ':')  && (sInstr[5] == ';'))
+						{
+//							aux[0] = '0';
+//							aux[1] = sInstr[3];
 //							aux[2] = '\0';
-//							onlyValve = (uint8_t) atoi(aux);
-//
-//							if(sInstr[6] == ':')
+//							uint8_t testCommand = (uint8_t) atoi(aux);
+
+							aux[0] = sInstr[3];
+							aux[1] = sInstr[4];
+							aux[2] = '\0';
+							uint8_t sector = (uint8_t) atoi(aux);
+
+							stateMode = 9;
+							sectorCurrently = sector;
+//							switch (testCommand)
 //							{
-//								aux[0] = sInstr[7];
-//								aux[1] = sInstr[8];
-//								aux[2] = '\0';
-//								timeSectorSet = 60*((uint16_t) atoi(aux));
+//								case 0:
 //
-//								stateMode = 3; //onlyOneSector;
-//								eeprom_write_byte(( uint8_t *)(addr_stateMode), stateMode);
+//									break;
+//
+//								case 1:
+//									break;
+//
+//								default:
+//									stateMode = 0;
+//									break;
 //							}
-//						}
-//						if(sInstr[2] == ':')
-//						{
-//							aux[0] = sInstr[3];
-//							aux[1] = sInstr[4];
-//							aux[2] = '\0';
-//							timeSectorSet = 60*((uint16_t) atoi(aux));
-//						}
-//						stateMode = 2; //automatic;
-//						eeprom_write_byte(( uint8_t *)(addr_stateMode), stateMode);
-//
-//						break;
-//
-//					case 3:
-//						if(sInstr[2] == ':')
-//						{
-//
-//							aux[0] = sInstr[3];
-//							aux[1] = sInstr[4];
-//							aux[2] = '\0';
-//							timeSectorSet = 60*((uint16_t) atoi(aux));
-//
-//						}
-//						stateMode = 2; //automatic;
-//						break;
-//
-//					case 9:	// Testing mode
-//	//				69:s01;
-//					if((sInstr[2] == ':')&&(sInstr[3] == 's'))
-//					{
-//						aux[0] = sInstr[4];
-//						aux[1] = sInstr[5];
-//						aux[2] = '\0';
-//						valveOnTest = (uint8_t) atoi(aux);
-//
-//						stateMode = 4;//valveTesting;
-//						eeprom_write_byte(( uint8_t *)(addr_stateMode), stateMode);
-//
-////						sprintf(buffer,"Testing Sector[%.2d]...",valveOnTest);
-////						SIM900_sendSMS(buffer);
-//					}
-//					break;
-//					default:
-//						Serial.println("Ni");
-//						break;
+						}
 				}
 				summary_Print(0);
 			}
 			break;
-
-
 // -----------------------------------------------------------------
-			case 7:
-			// 7:27988081875;
+			case 7:	// $7:i1:050;  $7:i2:200;  $7:p1:050;  $7:p2:070; Parameters
+			{         //012345678
+				if(sInstr[1]==':' && sInstr[2]=='i' && sInstr[3]=='1' && sInstr[4]==':' && sInstr[8]==';')
+				{
+//					aux[0] = '0';
+//					aux[1] = sInstr[3];
+//					aux[2] = '\0';
+//					uint8_t indexV = (uint8_t) atoi(aux);
+
+					aux2[0] = '0';
+					aux2[1] = sInstr[5];
+					aux2[2] = sInstr[6];
+					aux2[3] = sInstr[7];
+					aux2[4] = '\0';
+
+					uint16_t i1wordRef = 0;
+					i1wordRef = (uint16_t) atoi(aux2);
+					minIs  = i1wordRef;
+
+					uint8_t lbyteRef = 0, hbyteRef = 0;
+					lbyteRef = i1wordRef;
+					hbyteRef = (i1wordRef >> 8);
+
+					eeprom_write_byte((uint8_t *)(addr_minIs+1), hbyteRef);
+					eeprom_write_byte((uint8_t *)(addr_minIs), lbyteRef);
+
+					summary_Print(7);
+				}
+				else if(sInstr[1]==':' && sInstr[2]=='i' && sInstr[3]=='2' && sInstr[4]==':' && sInstr[8]==';')
+				{
+					aux2[0] = '0';
+					aux2[1] = sInstr[5];
+					aux2[2] = sInstr[6];
+					aux2[3] = sInstr[7];
+					aux2[4] = '\0';
+
+					maxIs = (uint16_t) atoi(aux2);
+
+					uint8_t lbyteRef = 0, hbyteRef = 0;
+					lbyteRef = maxIs;
+					hbyteRef = (maxIs >> 8);
+
+					eeprom_write_byte((uint8_t *)(addr_maxIs+1), hbyteRef);
+					eeprom_write_byte((uint8_t *)(addr_maxIs), lbyteRef);
+
+					nodeValve_setIs(maxIs);
+
+					summary_Print(7);
+				}
+				else if(sInstr[1]==':' && sInstr[2]=='p' && sInstr[3]=='1' && sInstr[4]==':' && sInstr[8]==';')
+				{
+					aux2[0] = '0';
+					aux2[1] = sInstr[5];
+					aux2[2] = sInstr[6];
+					aux2[3] = sInstr[7];
+					aux2[4] = '\0';
+
+					minPRess = (uint16_t) atoi(aux2);
+
+					uint8_t lbyteRef = 0, hbyteRef = 0;
+					lbyteRef = minPRess;
+					hbyteRef = (minPRess >> 8);
+
+					eeprom_write_byte((uint8_t *)(addr_minPRess+1), hbyteRef);
+					eeprom_write_byte((uint8_t *)(addr_minPRess), lbyteRef);
+
+					summary_Print(7);
+				}
+				else if(sInstr[1]==':' && sInstr[2]=='p' && sInstr[3]=='2' && sInstr[4]==':' && sInstr[8]==';')
+				{
+					aux2[0] = '0';
+					aux2[1] = sInstr[5];
+					aux2[2] = sInstr[6];
+					aux2[3] = sInstr[7];
+					aux2[4] = '\0';
+
+					maxPRess = (uint16_t) atoi(aux2);
+
+					uint8_t lbyteRef = 0, hbyteRef = 0;
+					lbyteRef = maxPRess;
+					hbyteRef = (maxPRess >> 8);
+
+					eeprom_write_byte((uint8_t *)(addr_maxPRess+1), hbyteRef);
+					eeprom_write_byte((uint8_t *)(addr_maxPRess), lbyteRef);
+
+					summary_Print(7);
+				}
+				else if(sInstr[1]==':' && sInstr[2]=='t' && sInstr[3]=='1' && sInstr[4]==':' && sInstr[8]==';') // timePipeB set
+				{
+					aux2[0] = '0';
+					aux2[1] = sInstr[5];
+					aux2[2] = sInstr[6];
+					aux2[3] = sInstr[7];
+					aux2[4] = '\0';
+
+					timePipeB = (uint16_t) atoi(aux2);
+
+					uint8_t lbyteRef = 0, hbyteRef = 0;
+					lbyteRef = timePipeB;
+					hbyteRef = (timePipeB >> 8);
+
+					eeprom_write_byte((uint8_t *)(addr_timePipeB+1), hbyteRef);
+					eeprom_write_byte((uint8_t *)(addr_timePipeB), lbyteRef);
+
+					summary_Print(7);
+				}
+				else if(sInstr[1]==':' && sInstr[2]=='m' && sInstr[3]=='1' && sInstr[4]==':' && sInstr[7]==';') // motor start timer 1
+				{	//$7:m1:xx;
+//					aux2[0] = sInstr[5];
+//					aux2[1] = sInstr[6];
+//					aux2[2] = sInstr[7];
+//					aux2[3] = sInstr[8];
+//					aux2[4] = '\0';
+
+					aux[0] = sInstr[5];
+					aux[1] = sInstr[6];
+					aux[2] = '\0';
+
+					motorTimerStart1 = (uint8_t) atoi(aux);
+
+//					uint8_t lbyteRef = 0, hbyteRef = 0;
+//					lbyteRef = motorTimerStart1;
+//					hbyteRef = (motorTimerStart1 >> 8);
+
+//					eeprom_write_byte((uint8_t *)(addr_motorTimerStart1+1), hbyteRef);
+//					eeprom_write_byte((uint8_t *)(addr_motorTimerStart1), lbyteRef);
+					eeprom_write_byte((uint8_t *)(addr_motorTimerStart1), motorTimerStart1);
+
+					Serial.print("motorTimer: ");
+					Serial.println(motorTimerStart1);
+
+					summary_Print(7);
+				}
+				else if(sInstr[1]==':' && sInstr[2]=='m' && sInstr[3]=='2' && sInstr[4]==':' && sInstr[8]==';') // motor start timer 2
+				{
+					aux2[0] = '0';
+					aux2[1] = sInstr[5];
+					aux2[2] = sInstr[6];
+					aux2[3] = sInstr[7];
+					aux2[4] = '\0';
+
+					motorTimerStart2 = (uint16_t) atoi(aux2);
+
+					uint8_t lbyteRef = 0, hbyteRef = 0;
+					lbyteRef = motorTimerStart2;
+					hbyteRef = (motorTimerStart2 >> 8);
+
+					eeprom_write_byte((uint8_t *)(addr_motorTimerStart2+1), hbyteRef);
+					eeprom_write_byte((uint8_t *)(addr_motorTimerStart2), lbyteRef);
+
+					summary_Print(7);
+				}
+
+//				7:27988081875;
 //
 ////				if(sInstr[1] == ':')
 ////				{
@@ -2319,14 +2066,12 @@ $727988081875;		Troca número de telefone
 //				{
 ////					summary_Print(9);
 //				}
-
-				break;
-
+			}
+			break;
 // -----------------------------------------------------------------
 			case 8:
 //				GLCD.Init();
 			break;
-
 // -----------------------------------------------------------------
 			case 9: // internet stuffs
 				// 9x;
@@ -2367,7 +2112,6 @@ $727988081875;		Troca número de telefone
 						break;
 				}
 				break;
-
 // -----------------------------------------------------------------
 			default:
 				summary_Print(10);
@@ -2433,19 +2177,20 @@ int main()
 	sei();								// System enable interruptions
 
 	init();								// Initialize arduino hardware requirements.
-	init_valves();
 	init_contactors();
 	init_ADC();
 //	init_SIM900();
 	init_Timer1_1Hz();
 	init_WDT();
+	Wire.begin();
 
 	Serial.begin(38400);				// Debug
 	Serial.println("_V_");				// Welcome!
 
-	refreshTimeSectors();				// Refresh variables
+//	SerialSIM900.begin(9600);
+
+	turnAll_OFF_init();
 	refreshStoredData();
-//	refreshCelPhoneNumber();
 
 	while (1)
 	{
@@ -2456,6 +2201,9 @@ int main()
 		// Bluetooth communication
 		wdt_reset();
 		comm_Bluetooth();
+
+		wdt_reset();
+//		comm_SIM900();
 
 		// Message Manipulation
 		wdt_reset();
@@ -2469,11 +2217,10 @@ int main()
 //		{
 //			Serial.println("Down!");
 //		}
-		//	char buffer[15];
-		//	sprintf(buffer,"RAM: %d",freeMemory());
-		//	Serial.println(buffer);
-
-////	SIM900 <--> uC
+//		char buffer[15];
+//		sprintf(buffer,"RAM: %d",freeMemory());
+//		Serial.println(buffer);
+////		SIM900 <--> uC
 //		wdt_reset();
 //		comm_SIM900();
 	}
@@ -2486,37 +2233,3 @@ int main()
 //	}
 }
 
-//ISR(TIMER1_COMPA_vect)
-//{
-//	if(flag_SIM900_checkAlive)
-//	{
-//		count_SIM900_timeout++;
-//	}
-//	else
-//	{
-//		if(count_30s > 30)
-//		{
-//			count_30s = 0;
-//			count_SIM900_timeout = 0;
-//
-//			flag_30s = 1;
-//		}
-//		else
-//			count_30s++;
-//	}
-//
-//	if(!count_timePipeB)
-//		flag_BrokenPipeVerify = 1;
-//	else
-//		count_timePipeB--;
-//
-//	if(stateMode)
-//	{
-//		if(timeSector == 0)
-//			flag_timeOVF = 1;
-//		else
-//			timeSector--;
-//	}
-//
-//	flag_1s = 1;
-//}

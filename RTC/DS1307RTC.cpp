@@ -22,7 +22,7 @@
   5 Sep 2011 updated for Arduino 1.0
  */
 
-#include "Wire.h"
+#include "../Comm/Wire.h"
 #include "DS1307RTC.h"
 
 #define DS1307_CTRL_ID 0x68 
