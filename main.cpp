@@ -167,6 +167,7 @@ uint8_t valveSequence[valveAlloc] 	= {0,0,0,0,0,0,0,0,0,0,0};
 uint8_t valveStatus[valveAlloc]		= {0,0,0,0,0,0,0,0,0,0,0};
 uint16_t valveIs					= 0;						// Current from sensor
 uint8_t sectorCurrently 			= 0;
+uint8_t sectorNext					= 0;
 uint8_t sectorChanged 				= 0;
 
 uint8_t flag_1s = 0;
@@ -541,6 +542,7 @@ void turnAll_OFF(uint8_t error)
 	flag_timeMatch = 0;
 	flag_Started = 0;
 	sectorCurrently = 0;
+	sectorNext = 0;
 	timeSector = 0;
 
 	stateMode = 0;	// Manual
@@ -835,16 +837,26 @@ void process_Working()
 	if(flag_timeOVF)	// down counter on TIMER 1 interrupt function
 	{
 		uint8_t flag_sectorActiveFound = 0;
-		uint8_t sectorNext = (sectorCurrently + 1);
+//		uint8_t sectorNext = (sectorCurrently + 1);
+		sectorNext++;
 
 		uint8_t A = 0;
 		uint8_t B = 0;
 		uint8_t C = 0;
 
+		if(flag_debug)
+		{
+			Serial.print("sectorNext: ");
+			Serial.println(sectorNext);
+		}
+
 		// encontrar proximo setor no vetor AND funcionando;
-		if(sectorNext < valveAlloc)	//
+		if(sectorNext <= valveAlloc)	//
 		{
 			do{
+				if(flag_debug)
+					Serial.println("do");
+
 				wdt_reset();
 				if(valveSequence[sectorNext-1])
 				{
@@ -879,7 +891,10 @@ void process_Working()
 						flag_BrokenPipeVerify = 0;
 						flag_timeOVF = 0;
 
-						summary_Print(4);
+//						if(flag_debug)
+//						{
+							summary_Print(4);
+//						}
 
 						if(!k1_readPin)
 						{
@@ -889,20 +904,20 @@ void process_Working()
 					else
 					{
 						nodeValve_setInstr(sectorNext, 0, 1);		// turn off the next sector
+						flag_sectorActiveFound = 1;
 						if(flag_debug)
 						{
 							Serial.print("sNext1: ");
 							Serial.println(sectorNext);
 						}
 
-						sectorNext++;
-
-						if(sectorNext > valveAlloc)
-						{
-							sectorCurrently = 12;
-//							flag_sectorActiveFound = 1;
-//							sectorCurrently = valveAlloc + 1;
-						}
+//						sectorNext++;
+//						if(sectorNext > valveAlloc)
+//						{
+//						c	sectorCurrently = 12;
+////							flag_sectorActiveFound = 1;
+////							sectorCurrently = valveAlloc + 1;
+//						}
 
 						if(flag_debug)
 						{
@@ -916,25 +931,28 @@ void process_Working()
 				}
 				else
 				{
-					nodeValve_setInstr(sectorNext, 0, 1); // should not have this line here
-					sectorNext++;
-
-					if(sectorNext > valveAlloc)
-					{
-						sectorCurrently = 12;
-//						flag_sectorActiveFound = 1;
-//						sectorCurrently = valveAlloc + 1;
-					}
-
-					if(flag_debug)
-					{
-						Serial.print("sNext3: ");
-						Serial.println(sectorNext);
-
-						Serial.print("sCur3: ");
-						Serial.println(sectorCurrently);
-					}
+					flag_sectorActiveFound = 1;
 				}
+//				else
+//				{
+//					nodeValve_setInstr(sectorNext, 0, 1); // should not have this line here
+//					sectorNext++;
+
+//					if(sectorNext > valveAlloc)
+//					{
+//						sectorCurrently = 12;
+////						flag_sectorActiveFound = 1;
+////						sectorCurrently = valveAlloc + 1;
+//					}
+//					if(flag_debug)
+//					{
+//						Serial.print("sNext3: ");
+//						Serial.println(sectorNext);
+//
+//						Serial.print("sCur3: ");
+//						Serial.println(sectorCurrently);
+//					}
+//				}
 
 				// Sai do loop se flag_sectorActiveFound = 1
 				// OU
@@ -960,8 +978,8 @@ void process_Working()
 	//			Serial.println(C);
 
 			}while(C);
-			Serial.print("sectorCurrently: ");
-			Serial.println(sectorCurrently);
+//			Serial.print("sectorCurrently: ");
+//			Serial.println(sectorCurrently);
 	//		}while(!(flag_sectorActiveFound && valveSequence[sectorNext]) || (sectorNext <= valveAlloc));	// keep here while not find sector or max sextor allocated
 		}
 		else
@@ -1105,8 +1123,7 @@ void refreshVariables()
 		flag_1s = 0;
 
 		motorStatus = k1_readPin;		// Motor status refresh
-
-		nodeValve_getSettings();			// Get valves info
+		nodeValve_getSettings();		// Get valves info
 		PRess = get_Pressure();			// Get pipe pressure
 
 		if(k1_readPin)
